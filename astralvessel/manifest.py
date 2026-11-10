@@ -106,6 +106,17 @@ class AgentPackage(BaseModel):
     prompt: str
     declared: list[DeclaredTool]
 
+    def briefing(self, extra: tuple[str, ...] = ()) -> str:
+        # Read on every turn, so an edit to prompt.md (or an appended section) applies without a restart.
+        parts = []
+        for name in ("prompt.md", *extra):
+            try:
+                parts.append((self.root / name).read_text().strip())
+            except OSError:
+                if name == "prompt.md":
+                    parts.append(self.prompt.strip())  # the copy read at startup
+        return "\n\n".join(p for p in parts if p)
+
     def services(self) -> set[str]:
         return {t.service for t in self.declared if t.service}
 

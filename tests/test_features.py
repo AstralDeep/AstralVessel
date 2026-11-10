@@ -181,3 +181,30 @@ async def test_task_store_failures_never_carry_database_text(tmp_path, monkeypat
     with pytest.raises(TaskStoreError):
         await store.get("t", None)
     await engine.dispose()
+
+
+async def test_briefings_reload_and_one_package_serves_two_agents(package_dir, model, tmp_path):
+    (package_dir / "extra.md").write_text("Also follow the extra protocol.")
+    path = tmp_path / "d.toml"
+    deployment(path, package_dir, services="")
+    path.write_text(path.read_text().replace('agents = ["tester"]', 'agents = ["tester", "tester-extra"]') + f"""
+[[agents]]
+id = "tester-extra"
+package = "{package_dir}"
+prompt_append = ["extra.md"]
+""")
+    dep = load_deployment(path)
+    settings = Settings(dep, task_db=str(tmp_path / "t.sqlite"), app_keys=app_keys(dep), allow_in_process=True)
+    client = VesselClient("http://vessel.test", APP_KEY, transport=httpx.ASGITransport(
+        app=create_app(settings, model_transport=model.transport())))
+    model.replies = [text_reply("a"), text_reply("b"), text_reply("c")]
+    [e async for e in client.stream("tester", "u", "hi")]
+    (package_dir / "prompt.md").write_text("You are an edited test agent.")
+    [e async for e in client.stream("tester", "u", "hi")]
+    [e async for e in client.stream("tester-extra", "u", "hi")]
+    systems = [r["messages"][0]["content"] for r in model.requests]
+    assert systems[0].startswith("You are a test agent.") and systems[1].startswith("You are an edited test agent.")
+    assert "extra protocol" in systems[2] and "extra protocol" not in systems[1]
+    path.write_text(path.read_text().replace('["extra.md"]', '["../escape.md"]'))
+    with pytest.raises(ValueError, match="inside the package"):
+        load_deployment(path)

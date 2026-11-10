@@ -325,7 +325,7 @@ class VesselExecutor(AgentExecutor):
 
         model = self._model()
         turn = Turn(self.agent.package, model, self.runner, emit, on_message, services=self.services,
-                    owner=context.call_context.user.user_name)
+                    owner=context.call_context.user.user_name, prompt_append=self.agent.prompt_append)
         finished = asyncio.Event()
         content: str | list[dict[str, Any]] = text
         if images:

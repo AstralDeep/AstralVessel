@@ -43,10 +43,10 @@ def tool_specs(package: AgentPackage) -> list[dict[str, Any]]:
     return specs
 
 
-def system_prompt(package: AgentPackage) -> str:
+def system_prompt(package: AgentPackage, extra: tuple[str, ...] = ()) -> str:
     sandbox = package.manifest.sandbox
     mounts = "".join(f"\n- {m.target} ({'read-only' if m.read_only else 'writable'})" for m in sandbox.mounts)
-    lines = [package.prompt.strip(), "", "## Environment", f"Today is {date.today().isoformat()}.",
+    lines = [package.briefing(extra), "", "## Environment", f"Today is {date.today().isoformat()}.",
              f"Tool commands run in {sandbox.workdir}."]
     if mounts:
         lines.append("Mounted data:" + mounts)
@@ -60,8 +60,10 @@ def system_prompt(package: AgentPackage) -> str:
 
 class Turn:
     def __init__(self, package: AgentPackage, model: ModelClient, runner: ToolRunner, emit: Emit,
-                 on_message: OnMessage | None = None, services: Any = None, owner: str = ""):
+                 on_message: OnMessage | None = None, services: Any = None, owner: str = "",
+                 prompt_append: tuple[str, ...] = ()):
         self.package = package
+        self.prompt_append = prompt_append
         self.services = services
         self.owner = owner
         self.declared = {t.name: t for t in package.declared}
@@ -118,7 +120,8 @@ class Turn:
     async def _loop(self, history: list[dict[str, Any]]) -> str:
         specs = tool_specs(self.package)
         send_reasoning = self.package.manifest.model.send_reasoning
-        base = [{"role": "system", "content": system_prompt(self.package)}, *for_model(history, send_reasoning)]
+        system = {"role": "system", "content": system_prompt(self.package, self.prompt_append)}
+        base = [system, *for_model(history, send_reasoning)]
         limit = self.package.manifest.model.max_steps
         while True:
             over_limit = self.steps >= limit

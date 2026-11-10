@@ -58,6 +58,8 @@ class AgentEntry(Strict):
     package: str
     sandbox: SandboxProfile = SandboxProfile()
     services: dict[str, ServiceGrant] = {}
+    # Extra briefing files from the package, appended after prompt.md: one package can serve as several agents.
+    prompt_append: list[str] = []
 
 
 class AppEntry(Strict):
@@ -94,6 +96,7 @@ class Agent(BaseModel):
     host_package: Path
     profile: SandboxProfile
     services: dict[str, ServiceGrant] = {}
+    prompt_append: tuple[str, ...] = ()
 
     @property
     def fingerprint(self) -> str:
@@ -123,8 +126,12 @@ def load_deployment(path: str | Path, packages_root: str | None = None) -> Deplo
         host = (path.parent / entry.package).resolve()
         package = load_package(Path(packages_root) / entry.id if packages_root else host)
         _check_grants(entry, package)
+        for name in entry.prompt_append:
+            target = (package.root / name).resolve()
+            if not target.is_file() or package.root not in target.parents:
+                raise ValueError(f"agent {entry.id}: prompt_append {name} must be a file inside the package")
         agents[entry.id] = Agent(id=entry.id, package=package, host_package=host, profile=entry.sandbox,
-                                 services=entry.services)
+                                 services=entry.services, prompt_append=tuple(entry.prompt_append))
     return Deployment(path=path, vessel=raw.vessel, egress=raw.egress, agents=agents, apps=raw.apps)
 
 
