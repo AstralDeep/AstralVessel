@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +25,7 @@ PERSONAS = {
 }
 AGENT = os.environ.get("DEMO_AGENT", "nexus")
 SKIPPED = {"text.delta", "reasoning.delta", "transcript"}
+CONVERSATION_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
 def projection_static() -> Path | None:
@@ -86,7 +88,7 @@ def create_app():
 
         owner = who["id"]
         cid = str(body.get("conversation_id") or new_id())
-        if not await history.claim(owner, cid, text):
+        if not CONVERSATION_ID.fullmatch(cid) or not await history.claim(owner, cid, text):
             return JSONResponse({"error": "unknown conversation"}, status_code=404)
         past = await history.history(owner, cid)
 
@@ -106,7 +108,9 @@ def create_app():
                 if kind != "transcript":
                     yield f"data: {json.dumps(item)}\n\n"
             messages, _turn = transcript_of(events)
-            if messages:
+            # Store a turn only if its transcript arrived whole; a cut stream could end mid tool call, and that
+            # prefix would make every later turn's history invalid.
+            if messages and any(e.get("type") == "transcript" and e.get("last") for e in events):
                 result = {k: v for k, v in finished.items() if k not in ("type", "raw", "task_id", "conversation_id",
                                                                           "state")}
                 result.update(text=answer.get("text", ""), components=answer.get("components", []))

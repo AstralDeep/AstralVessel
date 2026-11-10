@@ -51,7 +51,7 @@ def test_grants_must_match_what_the_agent_declares(vault_package, tmp_path):
         load_deployment(path)
     path.write_text(deployment_text(vault_package, mounts=(
         'mounts = [{ target = "/vault", source = "/v", read_only = false }]')))
-    with pytest.raises(ValueError, match="may not make it writable"):
+    with pytest.raises(ValueError, match="writable mounts"):
         load_deployment(path)
     path.write_text(deployment_text(vault_package, apps='[[apps]]\nname = "web"\nkey_sha256 = "x"\nagents = ["nope"]'))
     with pytest.raises(ValueError, match="unknown agents"):
@@ -105,6 +105,8 @@ def test_history_must_be_well_formed_and_never_system():
         {"version": 1, "messages": [{"role": "tool", "tool_call_id": "c9", "content": "x"}]},
         {"version": 1, "messages": [{"role": "assistant", "content": None, "tool_calls": [
             {"id": "c1", "type": "function", "function": {"name": "grep", "arguments": {}}}]}]},
+        {"version": 1, "messages": [{"role": "assistant", "content": None, "tool_calls": 1.0}]},
+        {"version": 1, "messages": [{"role": "assistant", "content": None, "tool_calls": [{"id": ["x"]}]}]},
     ]
     for payload in bad:
         with pytest.raises(TranscriptError):
@@ -133,5 +135,20 @@ async def test_concurrent_calls_cannot_see_each_other(package_dir, tmp_path):
     assert failed and "PermissionError" in tcp
     outside, failed = await runner.run("read", {"path": "/etc/hostname"})
     assert failed and "outside" in outside
+    climb, failed = await runner.run("glob", {"pattern": "../*"})
+    assert failed and ".." in climb
+    sock, failed = await runner.run("bash", {"command": "python3 -c \"import socket,os; socket.socket("
+                                                        "socket.AF_UNIX).bind(os.environ['TMPDIR'] + '/s')\""})
+    assert failed and "PermissionError" in sock
+    shm, failed = await runner.run("bash", {"command": "python3 -c \"import ctypes; l = ctypes.CDLL(None, "
+                                                       "use_errno=True); print(l.shmget(0, 4096, 0o1600), "
+                                                       "ctypes.get_errno())\""})
+    assert shm.split()[:2] == ["-1", "1"]
+    udp, failed = await runner.run("bash", {"command": "python3 -c \"import socket; socket.socket(socket.AF_INET, "
+                                                       "socket.SOCK_DGRAM)\""})
+    assert failed and "PermissionError" in udp
+    pair, failed = await runner.run("bash", {"command": "python3 -c \"import socket; socket.socketpair(); "
+                                                        "print('ok')\""})
+    assert pair.startswith("ok") and not failed
     await holder
     assert list(scratch.iterdir()) == []

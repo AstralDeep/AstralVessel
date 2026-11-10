@@ -236,12 +236,15 @@ async def _grep(args: dict[str, Any], workdir: str, timeout: int,
     return "\n".join(lines[:cap]) + tail, False
 
 
-async def _glob(args: dict[str, Any], workdir: str, timeout: int) -> tuple[str, bool]:
+async def _glob(args: dict[str, Any], workdir: str, timeout: int,
+                confinement: Confinement | None = None) -> tuple[str, bool]:
     base = _resolve(args.get("path"), workdir)
     cap = min(max(int(args.get("max_results") or 200), 1), 2000)
     pattern = str(args["pattern"])
     if pattern.startswith("/"):
         return "the pattern must be relative; pass the directory as path", True
+    if ".." in Path(pattern).parts:
+        return "the pattern may not climb out of the directory with ..", True
     # The walk runs in a thread with a time budget so a huge tree cannot stall every other call.
     deadline = time.monotonic() + timeout
 
@@ -251,6 +254,8 @@ async def _glob(args: dict[str, Any], workdir: str, timeout: int) -> tuple[str, 
         for match in base.rglob(pattern) if "/" not in pattern else base.glob(pattern):
             if time.monotonic() > deadline:
                 return found, True
+            if confinement is not None and not confinement.allows(match):
+                continue  # a symlink pointing outside the agent's data
             found.append(str(match))
             if len(found) > cap:
                 break
@@ -311,7 +316,7 @@ async def run_sandbox_tool(name: str, args: dict[str, Any], *, workdir: str, tim
         if name == "grep":
             return await _grep(args, workdir, timeout, confinement)
         if name == "glob":
-            return await _glob(args, workdir, timeout)
+            return await _glob(args, workdir, timeout, confinement)
         if name == "list":
             return await _list(args, workdir)
         if name == "bash":

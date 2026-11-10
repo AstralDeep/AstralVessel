@@ -64,6 +64,19 @@ check "a call cannot list processes"                   probe '
 check "a call cannot open TCP connections"             probe '
     out, failed = await r.run("bash", {"command": "python3 -c \"import socket; socket.create_connection((\x27127.0.0.1\x27, 8710), 2)\""})
     return failed and "PermissionError" in out'
+check "a call cannot create a socket file"             probe '
+    out, failed = await r.run("bash", {"command": "python3 -c \"import socket,os; socket.socket(socket.AF_UNIX).bind(os.environ[\x27TMPDIR\x27] + \x27/s\x27)\""})
+    return failed and "PermissionError" in out'
+check "a call cannot use shared memory"                probe '
+    out, _ = await r.run("bash", {"command": "python3 -c \"import ctypes; l = ctypes.CDLL(None, use_errno=True); print(l.shmget(0, 4096, 0o1600), ctypes.get_errno())\""})
+    return out.split()[:2] == ["-1", "1"]'
+check "a call cannot open UDP sockets"                probe '
+    out, failed = await r.run("bash", {"command": "python3 -c \"import socket; socket.socket(socket.AF_INET, socket.SOCK_DGRAM)\""})
+    return failed and "PermissionError" in out'
+check "glob cannot climb out of the agent's data"      probe '
+    out, failed = await r.run("glob", {"pattern": "../*"})
+    out2, _ = await r.run("glob", {"pattern": "*", "path": "/tmp"})
+    return failed and "outside" in out2'
 check "the vessel keeps no conversation store"         py vessel 'import glob,sqlite3,sys
 names = [r[0] for f in glob.glob("/data/*.sqlite") for r in sqlite3.connect(f).execute("select name from sqlite_master where type=\"table\"")]
 sys.exit(0 if names and all(n.startswith("tasks_") for n in names) else 1)'

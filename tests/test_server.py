@@ -53,7 +53,8 @@ agents = ["tester", "second"]
 
 def settings_for(path, tmp_path) -> Settings:
     deployment = load_deployment(path)
-    return Settings(deployment, task_db=str(tmp_path / "tasks.sqlite"), app_keys=app_keys(deployment))
+    return Settings(deployment, task_db=str(tmp_path / "tasks.sqlite"), app_keys=app_keys(deployment),
+                    allow_in_process=True)
 
 
 @pytest.fixture
@@ -211,6 +212,12 @@ async def test_empty_oversized_and_odd_requests_are_rejected(vessel, model):
     async with httpx.AsyncClient(transport=transport, base_url="http://vessel.test") as raw:
         headers = {"Authorization": f"Bearer {APP_KEY}", "X-Vessel-User": "alice"}
         r = await raw.post("/agents/tester/a2a", headers=headers, content=b"x" * 16_000_001)
+        assert r.status_code == 413
+
+        async def chunked():
+            for _ in range(17):
+                yield b"x" * 1_000_000
+        r = await raw.post("/agents/tester/a2a", headers=headers, content=chunked())
         assert r.status_code == 413
 
 

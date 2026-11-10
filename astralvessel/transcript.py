@@ -27,6 +27,15 @@ def envelope(messages: list[dict[str, Any]], turn: dict[str, Any] | None = None)
 
 
 def parse_history(payload: Any) -> list[dict[str, Any]]:
+    try:
+        return _parse(payload)
+    except TranscriptError:
+        raise
+    except Exception:  # noqa: BLE001  any other shape problem is still a refusal, never a crash
+        raise TranscriptError("the history is malformed") from None
+
+
+def _parse(payload: Any) -> list[dict[str, Any]]:
     if not isinstance(payload, dict) or payload.get("version") != VERSION:
         raise TranscriptError(f"history must be a transcript envelope with version {VERSION}")
     messages = payload.get("messages")
@@ -64,7 +73,10 @@ def _check_assistant(message: dict[str, Any], where: str, pending: set[str]) -> 
         raise TranscriptError(f"{where} content must be text or null")
     if "reasoning_content" in message and not isinstance(message["reasoning_content"], str):
         raise TranscriptError(f"{where} reasoning_content must be text")
-    for call in message.get("tool_calls") or []:
+    calls = message.get("tool_calls")
+    if calls is not None and not isinstance(calls, list):
+        raise TranscriptError(f"{where} tool_calls must be a list")
+    for call in calls or []:
         fn = call.get("function") if isinstance(call, dict) else None
         if (not isinstance(fn, dict) or call.get("type") != "function" or not isinstance(call.get("id"), str)
                 or not isinstance(fn.get("name"), str) or not isinstance(fn.get("arguments"), str)

@@ -127,8 +127,10 @@ def _check_grants(entry: AgentEntry, package: AgentPackage) -> None:
     if extra:
         raise ValueError(f"agent {entry.id} is granted mounts it does not declare: {', '.join(extra)}")
     for target, need in needs.items():
-        if need.read_only and not grants[target].read_only:
-            raise ValueError(f"agent {entry.id} declares {target} read-only; the deployment may not make it writable")
+        # Every sandbox can serve many users at once, and a writable mount would be shared between them.
+        if not need.read_only or not grants[target].read_only:
+            raise ValueError(f"agent {entry.id}: writable mounts ({target}) are not supported yet; mounts are "
+                             "read-only and each call writes only its own scratch directory")
 
 
 def resolve(value: str) -> str:

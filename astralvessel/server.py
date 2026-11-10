@@ -97,6 +97,7 @@ class Settings:
     sandbox_url_template: str | None = None
     sandbox_master: str | None = None
     app_keys: dict[str, AppEntry] = field(default_factory=dict)
+    allow_in_process: bool = False
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -106,7 +107,8 @@ class Settings:
         if template and (not master or len(master) < 16):
             raise SystemExit("VESSEL_SANDBOX_TOKEN (16+ characters) is required with remote sandboxes")
         return cls(deployment, task_db=os.environ.get("VESSEL_TASK_DB", "./vessel-data/tasks.sqlite"),
-                   sandbox_url_template=template, sandbox_master=master, app_keys=app_keys(deployment))
+                   sandbox_url_template=template, sandbox_master=master, app_keys=app_keys(deployment),
+                   allow_in_process=os.environ.get("VESSEL_DEV_UNSANDBOXED") == "1")
 
 
 def app_keys(deployment: Deployment) -> dict[str, AppEntry]:
@@ -351,8 +353,14 @@ def create_app(settings: Settings | None = None, runners: dict[str, ToolRunner] 
                 return refuse(rpc, 403, -32003, "this app may not call this agent")
             if agent_id is not None and not runtimes[agent_id].available:
                 return refuse(rpc, 503, -32004, "this agent's sandbox is not ready")
-            if int(request.headers.get("content-length") or 0) > MAX_BODY_BYTES:
-                return JSONResponse({"error": "request too large"}, status_code=413)
+            # Count what actually arrives: a chunked body carries no Content-Length to check.
+            chunks, size = [], 0
+            async for chunk in request.stream():
+                size += len(chunk)
+                if size > MAX_BODY_BYTES:
+                    return JSONResponse({"error": "request too large"}, status_code=413)
+                chunks.append(chunk)
+            request._body = b"".join(chunks)
             request.scope[SCOPE_KEY] = f"{app.name}/{user}"
             request.scope["vessel_app"] = app
             return await endpoint(request)
@@ -366,9 +374,11 @@ def create_app(settings: Settings | None = None, runners: dict[str, ToolRunner] 
             longest = max([sandbox.tool_timeout_seconds] + [t.timeout_seconds or 0 for t in agent.package.declared])
             runner = RemoteRunner(settings.sandbox_url_template.format(id=agent_id),
                                   sandbox_token(settings.sandbox_master or "", agent_id), longest)
-        else:
-            log.warning("agent %s: no sandbox URL, tools run in-process (development only)", agent_id)
+        elif settings.allow_in_process:
+            log.warning("agent %s: tools run unconfined in the vessel process (development only)", agent_id)
             runner = LocalRunner(agent.package)
+        else:
+            raise SystemExit("set VESSEL_SANDBOX_URL_TEMPLATE, or VESSEL_DEV_UNSANDBOXED=1 for local development")
         tasks = VesselTaskStore(engine, table_name=f"tasks_{agent_id.replace('-', '_')}",
                                 owner_resolver=lambda c: c.user.user_name)
         card = agent_card(deployment, agent)
