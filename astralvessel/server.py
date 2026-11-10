@@ -107,16 +107,18 @@ class Settings:
 
 
 class VesselExecutor(AgentExecutor):
-    def __init__(self, settings: Settings, store: Store, runner: ToolRunner):
+    def __init__(self, settings: Settings, store: Store, runner: ToolRunner, model_transport=None):
         self.settings = settings
         self.store = store
         self.runner = runner
+        self.model_transport = model_transport
         self.running: dict[str, tuple[asyncio.Task, asyncio.Event]] = {}
 
     def _model(self) -> ModelClient:
         m = self.settings.package.manifest.model
         return ModelClient(resolve_setting(m.endpoint), resolve_setting(m.api_key), m.model,
-                           temperature=m.temperature, max_output_tokens=m.max_output_tokens)
+                           temperature=m.temperature, max_output_tokens=m.max_output_tokens,
+                           transport=self.model_transport)
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         owner = context.call_context.user.user_name
@@ -224,7 +226,8 @@ def authenticate(settings: Settings, request: Request) -> str | None:
     return owner if USER_ID.fullmatch(owner) else None
 
 
-def create_app(settings: Settings | None = None, runner: ToolRunner | None = None) -> Starlette:
+def create_app(settings: Settings | None = None, runner: ToolRunner | None = None,
+               model_transport=None) -> Starlette:
     settings = settings or Settings.from_env()
     store = Store(settings.store_path)
     package = settings.package
@@ -235,7 +238,7 @@ def create_app(settings: Settings | None = None, runner: ToolRunner | None = Non
         else:
             log.warning("no VESSEL_SANDBOX_URL: tools run in-process, which is for development only")
             runner = LocalRunner(package)
-    executor = VesselExecutor(settings, store, runner)
+    executor = VesselExecutor(settings, store, runner, model_transport)
     card = agent_card(settings)
     handler = DefaultRequestHandler(agent_executor=executor, agent_card=card,
                                     task_store=InMemoryTaskStore(owner_resolver=lambda c: c.user.user_name))
