@@ -93,14 +93,14 @@
     var t = $("transcript"); t.textContent = "";
     t.appendChild(emptyState());
     $("timeline").textContent = "";
-    $("timeline").appendChild(el("li", { class: "timeline__empty text text--muted", text: "Events from the current turn appear here as they stream." }));
+    $("timeline").appendChild(el("li", { class: "timeline__empty", text: "Events from the current turn appear here as they stream." }));
     $("turn-stats").textContent = ""; $("frames").textContent = ""; $("isolation-result").textContent = "";
   }
 
   function emptyState() {
     var box = el("div", { class: "empty", id: "empty" }, [
-      el("p", { class: "heading heading--3", text: "Ask about UK research" }),
-      el("p", { class: "text text--muted", text: "Try one of these, or ask your own." })]);
+      el("p", { class: "empty__title", text: "Ask about UK research" }),
+      el("p", { class: "av-muted", text: "Try one of these, or ask your own." })]);
     var ex = el("div", { class: "examples" });
     state.examples.forEach(function (q) { ex.appendChild(el("button", { class: "example", type: "button", text: q, onclick: function () { ask(q); } })); });
     box.appendChild(ex);
@@ -136,12 +136,13 @@
     var body = el("div", { class: "prose" });
     var meta = el("div", { class: "msg__meta" });
     var extra = el("div", {});
-    var node = el("div", { class: "msg msg--agent" }, [el("span", { class: "msg__who", text: "Nexus · AstralVessel" }), narration, working, body, extra, meta]);
+    var node = el("div", { class: "msg msg--agent" }, [el("div", { class: "msg__who" }, [el("span", { class: "msg__badge", text: "✦", "aria-hidden": "true" }),
+      el("span", { class: "msg__name", text: "Nexus" }), el("span", { class: "msg__sub", text: "AstralVessel" })]), narration, working, body, extra, meta]);
     return { node: node, narration: narration, working: working, body: body, meta: meta, extra: extra, live: "" };
   }
 
   function statusTag(status) {
-    var cls = status === "ok" ? "tag" : "tag tag--muted";
+    var cls = status === "ok" ? "pill pill--ok" : "pill pill--muted";
     return el("span", { class: cls, text: status.replace("_", " ") });
   }
 
@@ -153,9 +154,9 @@
     if (result) {
       agent.meta.textContent = "";
       agent.meta.appendChild(statusTag(result.status));
-      agent.meta.appendChild(el("span", { class: "tag tag--muted", text: fmtNum((result.tokens || {}).input + (result.tokens || {}).output) + " tokens" }));
-      agent.meta.appendChild(el("span", { class: "tag tag--muted", text: result.steps + " steps" }));
-      agent.meta.appendChild(el("span", { class: "tag tag--muted", text: fmtMs(result.elapsed_ms || 0) }));
+      agent.meta.appendChild(el("span", { class: "pill pill--muted", text: fmtNum((result.tokens || {}).input + (result.tokens || {}).output) + " tokens" }));
+      agent.meta.appendChild(el("span", { class: "pill pill--muted", text: result.steps + " steps" }));
+      agent.meta.appendChild(el("span", { class: "pill pill--muted", text: fmtMs(result.elapsed_ms || 0) }));
     }
   }
 
@@ -168,14 +169,14 @@
   function astralPreview(components) {
     var frame = el("iframe", { class: "astral-preview__frame", sandbox: "allow-scripts", title: "AstralProjection rendering" });
     var box = el("div", { class: "astral-preview" }, [
-      el("div", { class: "cluster cluster--between" }, [el("span", { class: "eyebrow", text: "Rendered by AstralProjection" }),
-        el("span", { class: "tag", text: components.length + " primitives" })]),
+      el("div", { class: "av-row" }, [el("span", { class: "av-label", text: "Rendered by AstralProjection" }),
+        el("span", { class: "pill", text: components.length + " primitives" })]),
       frame,
       el("details", {}, [el("summary", { text: "AstralPrimitives JSON (application/vnd.astral.primitives+json)" }),
         el("pre", { text: JSON.stringify(components, null, 2) })])]);
     api("/api/render", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ components: components }) })
       .then(function (r) {
-        if (r.status !== 200) { frame.replaceWith(el("p", { class: "text text--small text--muted", text: "AstralProjection is not installed in this demo image." })); return; }
+        if (r.status !== 200) { frame.replaceWith(el("p", { class: "av-hint", text: "AstralProjection is not installed in this demo image." })); return; }
         frame.srcdoc = ASTRAL_HEAD + r.body.html + '<script src="/static/astral-preview.js"><\/script></body></html>';
       });
     return box;
@@ -319,10 +320,10 @@
           finalResult = e;
           break;
         case "error":
-          agent.extra.appendChild(el("div", { class: "callout callout--danger" }, [el("p", { class: "callout__title", text: "The turn could not run" }), el("p", { text: e.detail || "error" })]));
+          agent.extra.appendChild(el("div", { class: "notice notice--error" }, [el("p", { class: "notice__title", text: "The turn could not run" }), el("p", { text: e.detail || "error" })]));
           break;
         case "status":
-          if (e.text) agent.extra.appendChild(el("p", { class: "text text--small text--muted", text: e.text }));
+          if (e.text) agent.extra.appendChild(el("p", { class: "av-hint", text: e.text }));
           break;
       }
     }
@@ -373,13 +374,13 @@
 
   $("isolation-test").addEventListener("click", function () {
     var out = $("isolation-result"); out.textContent = "";
-    if (!state.conversation) { out.appendChild(el("p", { class: "text text--muted", text: "Open or start a conversation first." })); return; }
+    if (!state.conversation) { out.appendChild(el("p", { class: "av-muted", text: "Open or start a conversation first." })); return; }
     var other = Object.keys(state.personas).filter(function (k) { return k !== state.persona; })[0];
     var who = state.personas[other];
     api("/api/conversations/" + state.conversation + "?persona=" + other).then(function (r) {
       var held = r.status === 404;
-      out.appendChild(el("div", { class: held ? "callout callout--success" : "callout callout--danger" }, [
-        el("p", { class: "callout__title", text: held ? "Owner binding held" : "Owner binding failed" }),
+      out.appendChild(el("div", { class: held ? "notice notice--success" : "notice notice--error" }, [
+        el("p", { class: "notice__title", text: held ? "Owner binding held" : "Owner binding failed" }),
         el("p", { text: who.name + " (" + who.id + ") asked for conversation " + state.conversation.slice(0, 8) + "… and got HTTP " + r.status + (held ? ": not found, exactly as if it did not exist." : ".") }),
         el("pre", { text: JSON.stringify(r.body) })]));
     });
@@ -388,7 +389,7 @@
   function renderManifest(meta) {
     var box = $("manifest"); box.textContent = "";
     var m = meta.manifest || {}, card = meta.card || {};
-    box.appendChild(el("p", { class: "text", text: (m.agent || {}).description || card.description || "" }));
+    box.appendChild(el("p", { text: (m.agent || {}).description || card.description || "" }));
     var dl = el("dl", { class: "kv" });
     [["agent", (m.agent || {}).name + " " + (m.agent || {}).version], ["model", (m.model || {}).model], ["step limit", (m.model || {}).max_steps],
      ["deadline", ((m.sandbox || {}).deadline_seconds || "") + " s"], ["mounts", ((m.sandbox || {}).mounts || []).map(function (x) { return x.target + (x.read_only ? " (read-only)" : ""); }).join(", ")],
@@ -396,12 +397,12 @@
      ["protocol", ((card.supportedInterfaces || [])[0] || {}).protocolBinding + " · A2A " + ((card.supportedInterfaces || [])[0] || {}).protocolVersion]]
       .forEach(function (pair) { dl.appendChild(el("dt", { text: pair[0] })); dl.appendChild(el("dd", { text: String(pair[1]) })); });
     box.appendChild(dl);
-    box.appendChild(el("span", { class: "eyebrow", text: "Tools this agent has" }));
-    var row = el("div", { class: "tag-row" });
-    (m.tools || []).forEach(function (t) { row.appendChild(el("span", { class: "tag", text: t })); });
+    box.appendChild(el("span", { class: "av-label", text: "Tools this agent has" }));
+    var row = el("div", { class: "pill-row" });
+    (m.tools || []).forEach(function (t) { row.appendChild(el("span", { class: "pill", text: t })); });
     box.appendChild(row);
-    box.appendChild(el("p", { class: "text text--small text--muted", text: "A tool not listed in vessel.toml does not exist for the agent." }));
-    box.appendChild(el("details", {}, [el("summary", { class: "text text--small", text: "A2A agent card" }), el("pre", { class: "mono text--small", text: JSON.stringify(card, null, 1) })]));
+    box.appendChild(el("p", { class: "av-hint", text: "A tool not listed in vessel.toml does not exist for the agent." }));
+    box.appendChild(el("details", {}, [el("summary", { text: "A2A agent card" }), el("pre", { text: JSON.stringify(card, null, 1) })]));
   }
 
   api("/api/meta").then(function (r) {
@@ -412,6 +413,6 @@
     if (model) $("model-name").textContent = model.split("/").pop().replace(/-/g, " ");
     renderPersonas(); renderManifest(meta); resetTranscript(); loadConversations();
   }).catch(function () {
-    $("transcript").appendChild(el("div", { class: "callout callout--danger" }, [el("p", { class: "callout__title", text: "The Vessel is not reachable" })]));
+    $("transcript").appendChild(el("div", { class: "notice notice--error" }, [el("p", { class: "notice__title", text: "The Vessel is not reachable" })]));
   });
 })();
