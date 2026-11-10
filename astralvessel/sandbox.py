@@ -37,7 +37,7 @@ def confinement_for(package: AgentPackage, scratch_root: str = SCRATCH_ROOT) -> 
 class LocalRunner:
     def __init__(self, package: AgentPackage, confinement: Confinement | None = None):
         self.package = package
-        self.declared = {t.name: t for t in package.declared}
+        self.declared = {t.name: t for t in package.declared if t.command}  # service tools never run here
         self.confinement = confinement
 
     async def run(self, name: str, args: dict[str, Any]) -> tuple[str, bool]:

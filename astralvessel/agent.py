@@ -60,8 +60,11 @@ def system_prompt(package: AgentPackage) -> str:
 
 class Turn:
     def __init__(self, package: AgentPackage, model: ModelClient, runner: ToolRunner, emit: Emit,
-                 on_message: OnMessage | None = None):
+                 on_message: OnMessage | None = None, services: Any = None, owner: str = ""):
         self.package = package
+        self.services = services
+        self.owner = owner
+        self.declared = {t.name: t for t in package.declared}
         self.on_message = on_message
         self._sent = 0
         self.model = model
@@ -76,10 +79,11 @@ class Turn:
         self.steps = 0
         self.answer = ""
 
-    async def run(self, history: list[dict[str, Any]], user_text: str, *, conversation_id: str,
-                  turn_id: str) -> dict[str, Any]:
+    async def run(self, history: list[dict[str, Any]], user_content: str | list[dict[str, Any]], *,
+                  conversation_id: str, turn_id: str) -> dict[str, Any]:
+        # user_content is the message text, or OpenAI content parts when the user attached images.
         started = time.monotonic()
-        self.new_messages.append({"role": "user", "content": user_text})
+        self.new_messages.append({"role": "user", "content": user_content})
         await self.emit(ev.event(ev.TURN_STARTED, conversation_id=conversation_id, turn_id=turn_id))
         status, error = ev.STATUS_OK, None
         try:
@@ -218,6 +222,12 @@ class Turn:
             return f"attached {len(self.components)} components to the answer", False
         if name in WEB_TOOLS:
             return await (webfetch if name == "webfetch" else websearch)(arguments)
+        tool = self.declared.get(name)
+        if tool is not None and tool.service:
+            if self.services is None:
+                return f"{name}: its service is not configured", True
+            timeout = tool.timeout_seconds or self.package.manifest.sandbox.tool_timeout_seconds
+            return await self.services.call(tool, arguments, self.owner, timeout)
         if name in BUILTIN_TOOLS or name in {t.name for t in self.package.declared}:
             return await self.runner.run(name, arguments)
         return f"tool {name} does not exist", True

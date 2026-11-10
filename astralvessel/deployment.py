@@ -47,10 +47,17 @@ class SandboxProfile(Strict):
     scratch: str = "256m"
 
 
+class ServiceGrant(Strict):
+    # An application endpoint the vessel calls for the agent's service tools; values may be "env:NAME".
+    url: str
+    headers: dict[str, str] = {}
+
+
 class AgentEntry(Strict):
     id: str = Field(pattern=AGENT_ID)
     package: str
     sandbox: SandboxProfile = SandboxProfile()
+    services: dict[str, ServiceGrant] = {}
 
 
 class AppEntry(Strict):
@@ -86,12 +93,15 @@ class Agent(BaseModel):
     package: AgentPackage
     host_package: Path
     profile: SandboxProfile
+    services: dict[str, ServiceGrant] = {}
 
     @property
     def fingerprint(self) -> str:
         # Everything that shapes the sandbox container; a change means the operator must redeploy it.
         sandbox = self.package.manifest.sandbox.model_dump()
-        body = {"id": self.id, "profile": self.profile.model_dump(), "needs": sandbox, "schema": 1}
+        dockerfile = self.package.manifest.sandbox.dockerfile
+        image = hashlib.sha256((self.package.root / dockerfile).read_bytes()).hexdigest() if dockerfile else None
+        body = {"id": self.id, "profile": self.profile.model_dump(), "needs": sandbox, "image": image, "schema": 1}
         return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -113,11 +123,17 @@ def load_deployment(path: str | Path, packages_root: str | None = None) -> Deplo
         host = (path.parent / entry.package).resolve()
         package = load_package(Path(packages_root) / entry.id if packages_root else host)
         _check_grants(entry, package)
-        agents[entry.id] = Agent(id=entry.id, package=package, host_package=host, profile=entry.sandbox)
+        agents[entry.id] = Agent(id=entry.id, package=package, host_package=host, profile=entry.sandbox,
+                                 services=entry.services)
     return Deployment(path=path, vessel=raw.vessel, egress=raw.egress, agents=agents, apps=raw.apps)
 
 
 def _check_grants(entry: AgentEntry, package: AgentPackage) -> None:
+    missing_services = sorted(package.services() - set(entry.services))
+    extra_services = sorted(set(entry.services) - package.services())
+    if missing_services or extra_services:
+        raise ValueError(f"agent {entry.id}: services must match its tools; missing "
+                         f"{', '.join(missing_services) or 'none'}, unused {', '.join(extra_services) or 'none'}")
     needs = {m.target: m for m in package.manifest.sandbox.mounts}
     grants = {m.target: m for m in entry.sandbox.mounts}
     missing = sorted(set(needs) - set(grants))

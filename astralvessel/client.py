@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import uuid
 from collections.abc import AsyncIterator
@@ -34,10 +35,18 @@ class VesselClient:
         return response.json()
 
     async def stream(self, agent: str, user: str, text: str, *, history: list[dict[str, Any]] | None = None,
-                     conversation_id: str | None = None) -> AsyncIterator[dict[str, Any]]:
+                     conversation_id: str | None = None, images: list[tuple[str, bytes]] | None = None
+                     ) -> AsyncIterator[dict[str, Any]]:
+        # images: (media type, bytes) pairs, for agents whose model accepts images.
         parts: list[dict[str, Any]] = [{"text": text}]
+        for index, (media_type, raw) in enumerate(images or []):
+            parts.append({"raw": base64.b64encode(raw).decode(), "mediaType": media_type,
+                          "filename": f"image-{index + 1}"})
         if history:
-            parts.append({"data": {"version": 1, "messages": history}, "mediaType": TRANSCRIPT_MEDIA_TYPE})
+            # As JSON bytes: the A2A layer validates a structured data part field by field, slowly when it is long.
+            body = json.dumps({"version": 1, "messages": history}).encode()
+            parts.append({"raw": base64.b64encode(body).decode(), "mediaType": TRANSCRIPT_MEDIA_TYPE,
+                          "filename": "history.json"})
         message: dict[str, Any] = {"messageId": uuid.uuid4().hex, "role": "ROLE_USER", "parts": parts}
         if conversation_id:
             message["contextId"] = conversation_id

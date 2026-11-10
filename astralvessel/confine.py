@@ -22,7 +22,7 @@ FILE_RIGHTS = EXECUTE | WRITE_FILE | READ_FILE | (1 << 14)  # rights that apply 
 READ_RIGHTS = EXECUTE | READ_FILE | READ_DIR
 NET_BIND_TCP, NET_CONNECT_TCP = 1, 2
 SCOPE_ABSTRACT_UNIX_SOCKET, SCOPE_SIGNAL = 1, 2
-SYSTEM_PATHS = ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc")
+SYSTEM_PATHS = ("/usr", "/bin", "/sbin", "/lib", "/lib64", "/etc", "/opt")
 DEVICES = ("/dev/null", "/dev/zero", "/dev/urandom", "/dev/random")
 
 _libc = ctypes.CDLL(None, use_errno=True)

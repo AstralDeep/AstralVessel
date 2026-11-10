@@ -17,13 +17,13 @@ from astralvessel.transcript import TranscriptError, parse_history
 landlock = pytest.mark.skipif(confine.abi_version() < confine.REQUIRED_ABI, reason="kernel lacks Landlock ABI 6")
 
 
-WEB_APP = '[[apps]]\nname = "web"\nkey_sha256 = "env:WEB_KEY_SHA256"\nagents = ["nexus"]'
+WEB_APP = '[[apps]]\nname = "web"\nkey_sha256 = "env:WEB_KEY_SHA256"\nagents = ["guide"]'
 
 
-def deployment_text(package, mounts='mounts = [{ target = "/vault", source = "env:VAULT" }]', apps=WEB_APP) -> str:
+def deployment_text(package, mounts='mounts = [{ target = "/data", source = "env:DATA_DIR" }]', apps=WEB_APP) -> str:
     return f"""
 [[agents]]
-id = "nexus"
+id = "guide"
 package = "{package}"
 [agents.sandbox]
 {mounts}
@@ -33,61 +33,61 @@ package = "{package}"
 
 
 @pytest.fixture
-def vault_package(package_dir):
+def data_package(package_dir):
     manifest = package_dir / "vessel.toml"
     manifest.write_text(manifest.read_text().replace(
-        "[sandbox]\n", '[sandbox]\nmounts = [{ source = "vault", target = "/vault", read_only = true }]\n'))
+        "[sandbox]\n", '[sandbox]\nmounts = [{ source = "data", target = "/data", read_only = true }]\n'))
     return package_dir
 
 
-def test_grants_must_match_what_the_agent_declares(vault_package, tmp_path):
+def test_grants_must_match_what_the_agent_declares(data_package, tmp_path):
     path = tmp_path / "deployment.toml"
-    path.write_text(deployment_text(vault_package, mounts=""))
+    path.write_text(deployment_text(data_package, mounts=""))
     with pytest.raises(ValueError, match="does not grant"):
         load_deployment(path)
-    path.write_text(deployment_text(vault_package, mounts=(
-        'mounts = [{ target = "/vault", source = "/v" }, { target = "/etc/x", source = "/x" }]')))
+    path.write_text(deployment_text(data_package, mounts=(
+        'mounts = [{ target = "/data", source = "/v" }, { target = "/etc/x", source = "/x" }]')))
     with pytest.raises(ValueError, match="does not declare"):
         load_deployment(path)
-    path.write_text(deployment_text(vault_package, mounts=(
-        'mounts = [{ target = "/vault", source = "/v", read_only = false }]')))
+    path.write_text(deployment_text(data_package, mounts=(
+        'mounts = [{ target = "/data", source = "/v", read_only = false }]')))
     with pytest.raises(ValueError, match="writable mounts"):
         load_deployment(path)
-    path.write_text(deployment_text(vault_package, apps='[[apps]]\nname = "web"\nkey_sha256 = "x"\nagents = ["nope"]'))
+    path.write_text(deployment_text(data_package, apps='[[apps]]\nname = "web"\nkey_sha256 = "x"\nagents = ["nope"]'))
     with pytest.raises(ValueError, match="unknown agents"):
         load_deployment(path)
 
 
-def test_the_fingerprint_follows_the_sandbox_profile(vault_package, tmp_path):
+def test_the_fingerprint_follows_the_sandbox_profile(data_package, tmp_path):
     path = tmp_path / "deployment.toml"
-    path.write_text(deployment_text(vault_package))
-    before = load_deployment(path).agents["nexus"].fingerprint
-    path.write_text(deployment_text(vault_package).replace('source = "env:VAULT"', 'source = "/other"'))
-    assert load_deployment(path).agents["nexus"].fingerprint != before
+    path.write_text(deployment_text(data_package))
+    before = load_deployment(path).agents["guide"].fingerprint
+    path.write_text(deployment_text(data_package).replace('source = "env:DATA_DIR"', 'source = "/other"'))
+    assert load_deployment(path).agents["guide"].fingerprint != before
     assert sandbox_token("m" * 16, "a") != sandbox_token("m" * 16, "b")
 
 
-def test_compose_isolates_each_sandbox_and_keeps_secrets_out(vault_package, tmp_path):
+def test_compose_isolates_each_sandbox_and_keeps_secrets_out(data_package, tmp_path):
     path = tmp_path / "deployment.toml"
-    path.write_text(deployment_text(vault_package))
+    path.write_text(deployment_text(data_package))
     deployment = load_deployment(path)
     spec = generate(deployment, repo_root=None)
-    sandbox = spec["services"]["sandbox-nexus"]
-    assert sandbox["networks"] == ["tools-nexus"] and spec["networks"]["tools-nexus"]["internal"] is True
+    sandbox = spec["services"]["sandbox-guide"]
+    assert sandbox["networks"] == ["tools-guide"] and spec["networks"]["tools-guide"]["internal"] is True
     assert sandbox["read_only"] and sandbox["cap_drop"] == ["ALL"]
-    assert sandbox["environment"]["VESSEL_PROFILE_HASH"] == deployment.agents["nexus"].fingerprint
-    assert "${VAULT:?" in sandbox["volumes"][1] and sandbox["volumes"][1].endswith(":/vault:ro")
+    assert sandbox["environment"]["VESSEL_PROFILE_HASH"] == deployment.agents["guide"].fingerprint
+    assert "${DATA_DIR:?" in sandbox["volumes"][1] and sandbox["volumes"][1].endswith(":/data:ro")
     vessel = spec["services"]["vessel"]
     assert vessel["environment"]["WEB_KEY_SHA256"].startswith("${WEB_KEY_SHA256:?")
-    assert "tools-nexus" in vessel["networks"] and "outside" not in vessel["networks"]
+    assert "tools-guide" in vessel["networks"] and "outside" not in vessel["networks"]
     assert spec["services"]["egress"]["networks"] == ["egress", "outside"]
     master = "master-secret-123456"
     out = tmp_path / "compose.generated.yml"
     write(deployment, out, repo_root=None, master_token=master)
     assert master not in out.read_text()
-    secret = tmp_path / ".generated" / "sandbox-nexus.env"
+    secret = tmp_path / ".generated" / "sandbox-guide.env"
     assert stat.S_IMODE(os.stat(secret).st_mode) == 0o600
-    assert sandbox_token(master, "nexus") in secret.read_text()
+    assert sandbox_token(master, "guide") in secret.read_text()
 
 
 def test_history_must_be_well_formed_and_never_system():
@@ -126,7 +126,7 @@ async def test_concurrent_calls_cannot_see_each_other(package_dir, tmp_path):
     assert "private" not in peek and peek.count("Permission denied") >= 2
     own, failed = await runner.run("bash", {"command": "echo mine > $TMPDIR/x && cat $TMPDIR/x"})
     assert own.startswith("mine") and not failed
-    data, _ = await runner.run("bash", {"command": "cat wiki/person-ada-lovelace.md"})
+    data, _ = await runner.run("bash", {"command": "cat notes/ada-lovelace.md"})
     assert "Analytical engine" in data
     home, _ = await runner.run("bash", {"command": f"cat {os.path.expanduser('~')}/.bashrc"})
     assert "Permission denied" in home or "No such file" in home

@@ -14,12 +14,12 @@ Call it once, after you have the facts, with the components to show. Your writte
 stand on its own in Markdown; components are an addition, never a replacement.
 Give every table and chart a short, specific title.
 Supported component shapes (JSON):
-- {"type":"metric","title":"Researchers","value":"35,740","subtitle":"optional"}
-- {"type":"stat_group","title":"optional","items":[{"label":"Outputs","value":"76,080"}]}
-- {"type":"table","title":"optional","headers":["Name","Outputs"],"rows":[["A. Smith",12],["B. Jones",9]]}
-- {"type":"bar_chart","title":"By year","labels":["2022","2023"],"datasets":[{"label":"Outputs","data":[10,14]}]}
+- {"type":"metric","title":"Orders","value":"1,204","subtitle":"optional"}
+- {"type":"stat_group","title":"optional","items":[{"label":"Shipped","value":"1,150"}]}
+- {"type":"table","title":"optional","headers":["Name","Orders"],"rows":[["A. Smith",12],["B. Jones",9]]}
+- {"type":"bar_chart","title":"By year","labels":["2022","2023"],"datasets":[{"label":"Orders","data":[10,14]}]}
 - {"type":"line_chart","title":"Trend","labels":["2022","2023"],"datasets":[{"label":"Rate","data":[1.5,1.9]}]}
-- {"type":"key_value","title":"optional","items":[{"key":"ORCID","value":"0000-0002-..."}]}
+- {"type":"key_value","title":"optional","items":[{"key":"ID","value":"A-1042"}]}
 - {"type":"list","items":["first","second"],"ordered":false}
 - {"type":"card","title":"Heading","content":[ ...other components... ]}
 - {"type":"alert","title":"optional","message":"A caveat the reader must see","variant":"warning"}

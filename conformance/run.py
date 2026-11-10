@@ -96,7 +96,7 @@ async def main(base: str, key: str, agent: str) -> int:
 
     async def consume():
         async for e in client.stream(agent, a, "Use your tools to list the working directory, then search it for the "
-                                        "word 'research', then summarize what you found in detail."):
+                                        "word 'the', then summarize what you found in detail."):
             stream_events.append(e)
 
     runner = asyncio.create_task(consume())

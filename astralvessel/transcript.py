@@ -58,14 +58,33 @@ def _parse(payload: Any) -> list[dict[str, Any]]:
                 raise TranscriptError(f"{where} answers no open tool call")
             pending.discard(call)
         elif role == "user":
-            if not isinstance(message.get("content"), str):
-                raise TranscriptError(f"{where} needs text content")
+            _check_user_content(message.get("content"), where)
         else:
             _check_assistant(message, where, pending)
         checked.append(dict(message))
     if pending:
         raise TranscriptError("the history ends with unanswered tool calls")
     return checked
+
+
+IMAGE_URL = ("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/gif;base64,", "data:image/webp;base64,")
+MAX_IMAGE_URL_CHARS = 7_000_000
+
+
+def _check_user_content(content: Any, where: str) -> None:
+    # Text, or OpenAI content parts: text and inline images (data: URLs only, never a link the model would fetch).
+    if isinstance(content, str):
+        return
+    if not isinstance(content, list) or not content:
+        raise TranscriptError(f"{where} needs text content or a list of content parts")
+    for part in content:
+        kind = part.get("type") if isinstance(part, dict) else None
+        if kind == "text" and set(part) == {"type", "text"} and isinstance(part["text"], str):
+            continue
+        image = part.get("image_url") if kind == "image_url" and set(part) == {"type", "image_url"} else None
+        url = image.get("url") if isinstance(image, dict) and set(image) <= {"url", "detail"} else None
+        if not isinstance(url, str) or not url.startswith(IMAGE_URL) or len(url) > MAX_IMAGE_URL_CHARS:
+            raise TranscriptError(f"{where} has a content part that is not text or an inline image")
 
 
 def _check_assistant(message: dict[str, Any], where: str, pending: set[str]) -> None:

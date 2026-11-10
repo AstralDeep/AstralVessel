@@ -4,16 +4,20 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
 import datetime as dt
 import hashlib
 import hmac
+import json
 import logging
 import os
 import re
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
+import sqlalchemy
 from a2a.auth.user import User
 from a2a.server.agent_execution import AgentExecutor, RequestContext
 from a2a.server.events import EventQueue
@@ -54,6 +58,7 @@ from .deployment import Agent, AppEntry, Deployment, load_deployment, resolve, s
 from .model import ModelClient, resolve_setting
 from .primitives import schema_version
 from .sandbox import LocalRunner, RemoteRunner, ToolRunner
+from .services import ServiceClient
 
 log = logging.getLogger("astralvessel")
 USER_HEADER = "x-vessel-user"
@@ -62,6 +67,10 @@ CONVERSATION_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 MAX_MESSAGE_CHARS = 100_000
 MAX_BODY_BYTES = 16_000_000
 SCOPE_KEY = "vessel_owner"
+MAX_IMAGES = 8
+MAX_IMAGE_BYTES = 5_000_000
+IMAGE_MAGIC = {"image/png": (b"\x89PNG\r\n\x1a\n",), "image/jpeg": (b"\xff\xd8\xff",),
+               "image/gif": (b"GIF87a", b"GIF89a"), "image/webp": (b"RIFF",)}
 TERMINAL = {"TASK_STATE_COMPLETED", "TASK_STATE_FAILED", "TASK_STATE_CANCELED", "TASK_STATE_REJECTED"}
 
 
@@ -121,6 +130,12 @@ def app_keys(deployment: Deployment) -> dict[str, AppEntry]:
     return keys
 
 
+class TaskStoreError(RuntimeError):
+    # Raised in place of a database error, whose text (SQL, paths) the A2A layer would otherwise send to the client.
+    def __init__(self) -> None:
+        super().__init__("the task store is temporarily unavailable")
+
+
 class VesselTaskStore(DatabaseTaskStore):
     # Tasks are run state, not history: keep the user's text, drop streamed status messages and the history sent in.
     # Each store gets its own table registry; the SDK's shared one refuses a second table of the same name.
@@ -140,6 +155,11 @@ class VesselTaskStore(DatabaseTaskStore):
             self._initialized = True
 
     async def save(self, task: Task, context) -> None:
+        # Streamed text and reasoning chunks are transient; writing each one made a turn's cost grow with its
+        # length. The stored task still gets every state change, tool step and transcript chunk.
+        if task.status.state == TaskState.TASK_STATE_WORKING and task.status.HasField("message") and \
+                task.status.message.metadata.fields["vessel.event"].string_value in (ev.TEXT_DELTA, ev.REASONING_DELTA):
+            return
         keep = []
         for message in task.history:
             if message.role != Role.ROLE_USER:
@@ -151,7 +171,18 @@ class VesselTaskStore(DatabaseTaskStore):
             keep.append(message)
         del task.history[:]
         task.history.extend(keep)
-        await super().save(task, context)
+        try:
+            await super().save(task, context)
+        except Exception:
+            log.warning("task store save failed", exc_info=True)
+            raise TaskStoreError() from None
+
+    async def get(self, task_id: str, context) -> Task | None:
+        try:
+            return await super().get(task_id, context)
+        except Exception:
+            log.warning("task store read failed", exc_info=True)
+            raise TaskStoreError() from None
 
     async def recover(self) -> int:
         # Work in flight died with the previous process; mark it failed so nobody waits on it forever.
@@ -172,10 +203,67 @@ class VesselTaskStore(DatabaseTaskStore):
             await session.execute(delete(self.task_model).where(self.task_model.last_updated < cutoff))
 
 
+class DeltaCoalescer:
+    # Merges streamed text and reasoning pieces into one event per 50 ms or 512 characters. Every A2A event costs
+    # the server about a millisecond, so one event per model token capped a vessel at a few hundred tokens a second.
+    WINDOW_SECONDS = 0.05
+    MAX_CHARS = 512
+
+    def __init__(self, send):
+        self.send = send
+        self.pending: dict[str, Any] | None = None
+        self.since = 0.0
+
+    async def add(self, item: dict[str, Any]) -> None:
+        kind = item["type"]
+        if kind not in (ev.TEXT_DELTA, ev.REASONING_DELTA):
+            await self.flush()
+            await self.send(item)
+            return
+        same = self.pending and self.pending["type"] == kind and self.pending.get("step") == item.get("step")
+        if not same:
+            await self.flush()
+            self.pending, self.since = dict(item), time.monotonic()
+        else:
+            self.pending["content"] += item["content"]
+        if len(self.pending["content"]) >= self.MAX_CHARS or time.monotonic() - self.since >= self.WINDOW_SECONDS:
+            await self.flush()
+
+    async def flush(self) -> None:
+        if self.pending is not None:
+            pending, self.pending = self.pending, None
+            await self.send(pending)
+
+
+def image_urls(message: Message | None) -> list[str]:
+    # Attached images become data: URLs for the model; anything else attached as a file is refused.
+    urls = []
+    for part in message.parts if message else []:
+        if part.media_type == transcript.MEDIA_TYPE:
+            continue
+        if part.HasField("url"):
+            raise transcript.TranscriptError("attach images as bytes; the vessel fetches nothing by URL")
+        if not part.HasField("raw"):
+            continue
+        magic = IMAGE_MAGIC.get(part.media_type)
+        if magic is None:
+            raise transcript.TranscriptError("only PNG, JPEG, GIF and WebP images may be attached")
+        if len(part.raw) > MAX_IMAGE_BYTES or not part.raw.startswith(magic) or (
+                part.media_type == "image/webp" and part.raw[8:12] != b"WEBP"):
+            raise transcript.TranscriptError(f"each image must be a valid {part.media_type} under "
+                                             f"{MAX_IMAGE_BYTES // 1_000_000} MB")
+        urls.append(f"data:{part.media_type};base64,{base64.b64encode(part.raw).decode()}")
+    if len(urls) > MAX_IMAGES:
+        raise transcript.TranscriptError(f"at most {MAX_IMAGES} images may be attached")
+    return urls
+
+
 class VesselExecutor(AgentExecutor):
-    def __init__(self, agent: Agent, runner: ToolRunner, model_transport=None):
+    def __init__(self, agent: Agent, runner: ToolRunner, model_transport=None,
+                 services: ServiceClient | None = None):
         self.agent = agent
         self.runner = runner
+        self.services = services
         self.model_transport = model_transport
         self.running: dict[str, tuple[asyncio.Task, asyncio.Event]] = {}
 
@@ -195,8 +283,12 @@ class VesselExecutor(AgentExecutor):
         text = context.get_user_input().strip()
         try:
             history = self._history(context.message)
+            images = image_urls(context.message)
         except transcript.TranscriptError as exc:
-            await updater.reject(self._note(updater, f"invalid history: {exc}"))
+            await updater.reject(self._note(updater, f"invalid request: {exc}"))
+            return
+        if images and not self.agent.package.manifest.model.images:
+            await updater.reject(self._note(updater, "this agent does not accept images"))
             return
         if not text:
             await updater.reject(self._note(updater, "send a text message"))
@@ -211,23 +303,35 @@ class VesselExecutor(AgentExecutor):
         artifact_id = f"{task_id}-transcript"
         chunks = [0]
 
-        async def emit(item: dict[str, Any]) -> None:
-            if item["type"] == ev.TURN_FINISHED:
-                return
+        async def send(item: dict[str, Any]) -> None:
             message = updater.new_agent_message([data_part(item)], metadata={"vessel.event": item["type"]})
             await updater.update_status(TaskState.TASK_STATE_WORKING, message,
                                         metadata={"vessel.event": item["type"]})
 
+        stream = DeltaCoalescer(send)
+
+        async def emit(item: dict[str, Any]) -> None:
+            if item["type"] == ev.TURN_FINISHED:
+                await stream.flush()
+                return
+            await stream.add(item)
+
         async def on_message(message: dict[str, Any]) -> None:
+            await stream.flush()
             await updater.add_artifact([data_part(transcript.envelope([message]), transcript.MEDIA_TYPE)],
                                        artifact_id=artifact_id, name="transcript", append=chunks[0] > 0,
                                        last_chunk=False)
             chunks[0] += 1
 
         model = self._model()
-        turn = Turn(self.agent.package, model, self.runner, emit, on_message)
+        turn = Turn(self.agent.package, model, self.runner, emit, on_message, services=self.services,
+                    owner=context.call_context.user.user_name)
         finished = asyncio.Event()
-        inner = asyncio.create_task(turn.run(history, text, conversation_id=conversation_id, turn_id=task_id))
+        content: str | list[dict[str, Any]] = text
+        if images:
+            content = [{"type": "text", "text": text},
+                       *({"type": "image_url", "image_url": {"url": u}} for u in images)]
+        inner = asyncio.create_task(turn.run(history, content, conversation_id=conversation_id, turn_id=task_id))
         self.running[task_id] = (inner, finished)
         try:
             result = await asyncio.shield(inner)
@@ -237,6 +341,7 @@ class VesselExecutor(AgentExecutor):
         finally:
             self.running.pop(task_id, None)
             await model.close()
+            await stream.flush()
         try:
             summary = {k: v for k, v in result.items() if k not in ("text", "components")}
             summary["model"] = self.agent.package.manifest.model.model
@@ -248,8 +353,15 @@ class VesselExecutor(AgentExecutor):
             finished.set()
 
     def _history(self, message: Message | None) -> list[dict[str, Any]]:
+        # History arrives as JSON bytes (fast) or as a structured data part (which the A2A layer walks field by
+        # field, slowly for long conversations).
         for part in message.parts if message else []:
             if part.media_type == transcript.MEDIA_TYPE:
+                if part.HasField("raw"):
+                    try:
+                        return transcript.parse_history(json.loads(part.raw))
+                    except ValueError:
+                        raise transcript.TranscriptError("the history is not valid JSON") from None
                 return transcript.parse_history(MessageToDict(part.data))
         return []
 
@@ -297,7 +409,8 @@ def agent_card(deployment: Deployment, agent: Agent) -> AgentCard:
         # Astral reads a skill's permission scope from a scope: tag; an agent carries its strongest tool's scope.
         skills=[AgentSkill(id=agent.id, name=meta.name, description=meta.description,
                            tags=["astralvessel", f"scope:{agent.package.strongest_scope()}"], examples=meta.examples)],
-        default_input_modes=["text/plain", transcript.MEDIA_TYPE],
+        default_input_modes=["text/plain", transcript.MEDIA_TYPE] + (
+            list(IMAGE_MAGIC) if agent.package.manifest.model.images else []),
         default_output_modes=["text/markdown", transcript.MEDIA_TYPE] + (
             [ev.PRIMITIVES_MEDIA_TYPE] if agent.package.manifest.output.primitives else []),
         supported_interfaces=[AgentInterface(protocol_binding="JSONRPC", url=agent_url(deployment, agent.id) + "/a2a",
@@ -328,13 +441,22 @@ def authenticate(settings: Settings, request: Request) -> tuple[AppEntry, str] |
 
 
 def create_app(settings: Settings | None = None, runners: dict[str, ToolRunner] | None = None,
-               model_transport=None) -> Starlette:
+               model_transport=None, service_transport=None) -> Starlette:
     settings = settings or Settings.from_env()
     deployment = settings.deployment
     os.makedirs(os.path.dirname(os.path.abspath(settings.task_db)), exist_ok=True)
     engine = create_async_engine(f"sqlite+aiosqlite:///{settings.task_db}")
+
+    @sqlalchemy.event.listens_for(engine.sync_engine, "connect")
+    def _pragmas(connection, _record) -> None:
+        cursor = connection.cursor()
+        cursor.execute("PRAGMA journal_mode=WAL")
+        cursor.execute("PRAGMA synchronous=NORMAL")
+        cursor.execute("PRAGMA busy_timeout=15000")
+        cursor.close()
     runtimes: dict[str, Runtime] = {}
     routes: list[Route] = []
+    service_clients: list[ServiceClient] = []
 
     def refuse(rpc: bool, status: int, code: int, message: str) -> JSONResponse:
         if rpc:
@@ -384,7 +506,10 @@ def create_app(settings: Settings | None = None, runners: dict[str, ToolRunner] 
         card = agent_card(deployment, agent)
         runtime = Runtime(agent, runner, card, tasks, available=not isinstance(runner, RemoteRunner))
         runtimes[agent_id] = runtime
-        handler = DefaultRequestHandler(agent_executor=VesselExecutor(agent, runner, model_transport),
+        services = ServiceClient(agent_id, agent.services, service_transport) if agent.services else None
+        if services:
+            service_clients.append(services)
+        handler = DefaultRequestHandler(agent_executor=VesselExecutor(agent, runner, model_transport, services),
                                         agent_card=card, task_store=tasks)
         base = f"/agents/{agent_id}"
         for route in create_jsonrpc_routes(handler, rpc_url=f"{base}/a2a", context_builder=OwnerContextBuilder()):
@@ -438,6 +563,8 @@ def create_app(settings: Settings | None = None, runners: dict[str, ToolRunner] 
                 job.cancel()
             for runtime in runtimes.values():
                 await runtime.runner.close()
+            for client in service_clients:
+                await client.close()
             await engine.dispose()
 
     return Starlette(routes=routes, lifespan=lifespan)
