@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import hmac
 import os
+import signal
 from typing import Any, Protocol
 
 import httpx
@@ -15,7 +16,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from .manifest import AgentPackage, load_package
-from .tools import run_sandbox_tool
+from .tools import ACTIVE_SESSIONS, SPAWNING, run_sandbox_tool
 
 
 class ToolRunner(Protocol):
@@ -58,9 +59,28 @@ class RemoteRunner:
         await self._client.aclose()
 
 
+def reap_strays() -> None:
+    # Background processes a call left behind (nohup, setsid, a daemon) must not outlive it: they could
+    # watch later calls made for other users. Only the sandbox server runs this, inside its own container.
+    me = os.getpid()
+    if me != 1 or SPAWNING[0]:
+        return  # not the container's init process (never reap a developer's machine), or a call is starting
+    for entry in os.listdir("/proc"):
+        if not entry.isdigit() or int(entry) == me:
+            continue
+        pid = int(entry)
+        try:
+            if os.getsid(pid) not in ACTIVE_SESSIONS:
+                os.kill(pid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+
 def sandbox_app(package_path: str | None = None, token: str | None = None) -> Starlette:
     package = load_package(package_path or os.environ["VESSEL_PACKAGE"])
     secret = token or os.environ["VESSEL_SANDBOX_TOKEN"]
+    if len(secret) < 16:
+        raise ValueError("VESSEL_SANDBOX_TOKEN must be at least 16 characters")
     runner = LocalRunner(package)
 
     async def run(request: Request) -> JSONResponse:
@@ -71,13 +91,17 @@ def sandbox_app(package_path: str | None = None, token: str | None = None) -> St
         name, args = str(body.get("name", "")), body.get("args") or {}
         if not isinstance(args, dict):
             return JSONResponse({"error": True, "output": "arguments must be an object"}, status_code=400)
+        reap_strays()
         task = asyncio.create_task(runner.run(name, args))
-        while not task.done():
-            done, _ = await asyncio.wait({task}, timeout=0.5)
-            if not done and await request.is_disconnected():
-                task.cancel()
-                return JSONResponse({"error": True, "output": "cancelled"}, status_code=499)
-        output, error = task.result()
+        try:
+            while not task.done():
+                done, _ = await asyncio.wait({task}, timeout=0.5)
+                if not done and await request.is_disconnected():
+                    task.cancel()
+                    return JSONResponse({"error": True, "output": "cancelled"}, status_code=499)
+            output, error = task.result()
+        finally:
+            reap_strays()
         return JSONResponse({"output": output, "error": error})
 
     async def health(_request: Request) -> JSONResponse:

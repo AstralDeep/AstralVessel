@@ -140,3 +140,31 @@ async def test_empty_message_is_rejected(vessel):
     client, _ = vessel
     events = await collect(client, "alice", "   ")
     assert events[-1]["state"] == "TASK_STATE_REJECTED"
+
+
+async def test_oversized_messages_and_odd_conversation_ids_are_rejected(vessel, model):
+    client, transport = vessel
+    events = await collect(client, "alice", "x" * 100_001)
+    assert events[-1]["state"] == "TASK_STATE_REJECTED"
+    events = await collect(client, "alice", "hello", "../../etc")
+    assert events[-1]["state"] == "TASK_STATE_REJECTED"
+    assert model.requests == []
+    async with httpx.AsyncClient(transport=transport, base_url="http://vessel.test") as raw:
+        headers = {"Authorization": f"Bearer {APP_KEY}", "X-Vessel-User": "alice"}
+        r = await raw.post("/a2a", headers=headers, content=b"x" * 1_000_001)
+        assert r.status_code == 413
+
+
+async def test_deleted_conversations_are_gone_from_the_task_store_too(vessel, model):
+    client, transport = vessel
+    model.replies = [text_reply("a long enough answer")]
+    events = await collect(client, "alice", "Remember heron.")
+    task_id, cid = events[0]["task_id"], events[0]["conversation_id"]
+    headers = {"Authorization": f"Bearer {APP_KEY}", "X-Vessel-User": "alice", "A2A-Version": "1.0"}
+    body = {"jsonrpc": "2.0", "id": 1, "method": "GetTask", "params": {"id": task_id}}
+    async with httpx.AsyncClient(transport=transport, base_url="http://vessel.test") as raw:
+        task = (await raw.post("/a2a", headers=headers, json=body)).json()["result"]
+        assert [m["role"] for m in task["history"]] == ["ROLE_USER"]
+        assert await client.delete("alice", cid)
+        gone = (await raw.post("/a2a", headers=headers, json=body)).json()
+        assert gone["error"]["code"] == -32001

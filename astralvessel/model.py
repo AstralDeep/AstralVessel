@@ -94,8 +94,8 @@ class ModelClient:
                         if payload == "[DONE]":
                             break
                         try:
-                            chunk = json.loads(payload)
-                        except json.JSONDecodeError:
+                            chunk = json.loads(payload, parse_constant=_no_constants)
+                        except ValueError:
                             continue
                         started = True
                         if chunk.get("usage"):
@@ -105,20 +105,21 @@ class ModelClient:
                             }
                         for choice in chunk.get("choices") or []:
                             delta = choice.get("delta") or {}
-                            thinking = delta.get("reasoning_content") or delta.get("reasoning")
+                            thinking = _text(delta.get("reasoning_content") or delta.get("reasoning"))
                             if thinking:
                                 result.reasoning += thinking
                                 yield "reasoning", thinking
-                            if delta.get("content"):
-                                result.text += delta["content"]
-                                yield "text", delta["content"]
+                            content = _text(delta.get("content"))
+                            if content:
+                                result.text += content
+                                yield "text", content
                             for tc in delta.get("tool_calls") or []:
-                                slot = calls.setdefault(int(tc.get("index") or 0),
+                                slot = calls.setdefault(_index(tc.get("index")),
                                                         {"id": "", "name": "", "arguments": ""})
                                 slot["id"] = tc.get("id") or slot["id"]
                                 fn = tc.get("function") or {}
-                                slot["name"] += fn.get("name") or ""
-                                slot["arguments"] += fn.get("arguments") or ""
+                                slot["name"] += _text(fn.get("name"))
+                                slot["arguments"] += _text(fn.get("arguments"))
                             if choice.get("finish_reason"):
                                 result.finish_reason = choice["finish_reason"]
                     result.tool_calls = [
@@ -132,3 +133,18 @@ class ModelClient:
                     raise ModelError(f"model endpoint unreachable ({type(exc).__name__})") from None
                 await asyncio.sleep(min(2 ** attempt, 8))
         raise ModelError("model endpoint kept failing")
+
+
+def _no_constants(name: str) -> None:
+    raise ValueError(f"non-finite number {name}")
+
+
+def _text(value: Any) -> str:
+    # Model text can carry lone surrogates, which cannot be encoded later; replace them.
+    if not isinstance(value, str):
+        return ""
+    return value.encode("utf-8", "replace").decode("utf-8")
+
+
+def _index(value: Any) -> int:
+    return value if isinstance(value, int) and 0 <= value < 64 else 0

@@ -4,7 +4,10 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
+import logging
+import math
 import time
 from collections.abc import Awaitable, Callable
 from datetime import date
@@ -17,6 +20,8 @@ from .primitives import PRESENT_DESCRIPTION, PRESENT_PARAMETERS, validate_compon
 from .sandbox import ToolRunner
 from .tools import BUILTIN_SCHEMAS, WEB_TOOLS, clip, tool_spec
 from .web import webfetch, websearch
+
+log = logging.getLogger("astralvessel")
 
 Emit = Callable[[dict[str, Any]], Awaitable[None]]
 EVENT_OUTPUT_CHARS = 4000
@@ -81,6 +86,9 @@ class Turn:
             status = ev.STATUS_CANCELLED
         except ModelError as exc:
             status, error = ev.STATUS_MODEL_ERROR, str(exc)
+        except Exception:  # noqa: BLE001  the turn still ends with turn.finished and is recorded
+            log.warning("turn failed", exc_info=True)
+            status, error = ev.STATUS_MODEL_ERROR, "the turn failed unexpectedly"
         self._close_dangling_calls()
         if self.new_messages[-1]["role"] != "assistant":
             self.new_messages.append({"role": "assistant", "content": f"[this turn ended early: {status}]"})
@@ -143,7 +151,7 @@ class Turn:
     async def _call_tool(self, call_id: str, name: str, raw_arguments: str) -> str:
         started = time.monotonic()
         try:
-            arguments = json.loads(raw_arguments or "{}")
+            arguments = json.loads(raw_arguments or "{}", parse_constant=_reject_number, parse_float=_finite)
             if not isinstance(arguments, dict):
                 raise ValueError
         except ValueError:
@@ -155,7 +163,15 @@ class Turn:
         elif arguments is None:
             output, failed = "the arguments were not a valid JSON object", True
         else:
-            output, failed = await self._dispatch(name, arguments)
+            try:
+                output, failed = await self._dispatch(name, arguments)
+            except BaseException:
+                # A cancel or the deadline stopped the tool; still close the event pair before unwinding.
+                with contextlib.suppress(Exception):
+                    await self.emit(ev.event(ev.TOOL_FINISHED, call_id=call_id, name=name, output="[stopped]",
+                                             error=True, truncated=False,
+                                             elapsed_ms=int((time.monotonic() - started) * 1000)))
+                raise
         limit = self.package.manifest.sandbox.tool_output_chars
         output, truncated = clip(output, limit)
         shown, _ = clip(output, EVENT_OUTPUT_CHARS)
@@ -164,6 +180,13 @@ class Turn:
         return output
 
     async def _dispatch(self, name: str, arguments: dict[str, Any]) -> tuple[str, bool]:
+        try:
+            return await self._run_tool(name, arguments)
+        except Exception:  # noqa: BLE001  report a generic failure; raw exception text never reaches the model
+            log.warning("tool %s failed", name, exc_info=True)
+            return f"{name} failed", True
+
+    async def _run_tool(self, name: str, arguments: dict[str, Any]) -> tuple[str, bool]:
         if name == "present":
             try:
                 self.components = validate_components(arguments.get("components"))
@@ -184,3 +207,14 @@ class Turn:
                     self.new_messages.append({"role": "tool", "tool_call_id": call["id"],
                                               "content": "[not run: the turn ended first]"})
                     answered.add(call["id"])
+
+
+def _reject_number(name: str) -> None:
+    raise ValueError(f"non-finite number {name}")
+
+
+def _finite(text: str) -> float:
+    value = float(text)
+    if math.isinf(value):
+        raise ValueError("non-finite number")
+    return value

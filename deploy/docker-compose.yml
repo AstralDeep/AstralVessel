@@ -53,12 +53,17 @@ services:
       VESSEL_SANDBOX_TOKEN: ${VESSEL_SANDBOX_TOKEN}
       VESSEL_STORE: /data/vessel.sqlite
       VESSEL_PUBLIC_URL: http://vessel:8700
+      # Listen only on the front network, so the sandbox (which shares the tools network) cannot reach the API.
+      VESSEL_HOST: 172.31.247.10
     volumes:
       - ${VESSEL_AGENT_DIR:-../examples/nexus}:/agent:ro
       - vessel_data:/data
     tmpfs:
       - /tmp:size=64m,noexec,nosuid,nodev,mode=1777
-    networks: [front, tools, egress]
+    networks:
+      front: { ipv4_address: 172.31.247.10 }
+      tools: {}
+      egress: {}
     mem_limit: 1g
     pids_limit: 256
     depends_on: [egress, sandbox]
@@ -83,7 +88,9 @@ services:
 networks:
   tools: { internal: true }
   egress: { internal: true }
-  front: { internal: true }
+  front:
+    internal: true
+    ipam: { config: [{ subnet: 172.31.247.0/24 }] }
   outside: {}
 
 volumes:

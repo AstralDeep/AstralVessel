@@ -80,6 +80,9 @@ A harness **must** serve A2A protocol version 1.0 over JSON-RPC at `POST /a2a`, 
 - A2A's `contextId` is the conversation. A message with a known `contextId` continues it; a message
   without one starts a new conversation.
 - A2A's task is one turn.
+- A harness **may** limit message size; the reference harness rejects messages over 100,000 characters,
+  request bodies over 1 MB, and conversation ids outside `A-Za-z0-9._:-` (1 to 128 characters).
+- Deleting a conversation **must** also remove its tasks, so `GetTask` and `ListTasks` no longer return them.
 
 ## 3. Turn events
 
@@ -124,14 +127,20 @@ harness and secrets **must not** appear in any event, artifact or stored record.
   no access to the conversation store, and no model or deployment secrets. The sandbox **should** have a
   read-only root filesystem, size-capped writable scratch space mounted `noexec`, an unprivileged user,
   no Linux capabilities, and memory, CPU and process limits.
+- A tool call's processes **must not** outlive the call; background processes it leaves behind are killed
+  before the next call runs. Tool output **must** be bounded before it leaves the sandbox.
+- While one sandbox serves several users, their calls share its scratch space and can see each other's
+  process list. A deployment that needs isolation between users **should** give each conversation its own
+  sandbox.
 - The harness **must not** hold the model provider's key when an egress service is available; the
   egress service adds it. Web access (`webfetch`, `websearch`) **must** go through a proxy that only
   reaches public addresses on ports 80 and 443, resolves and checks every target, and connects to the
-  checked address.
+  checked address. Only globally routable addresses count as public: shared address space
+  (100.64.0.0/10, used by Tailscale) and other special ranges **must** be refused.
 
 ## 6. Apps and owners
 
-- Every request other than the agent card **must** carry `Authorization: Bearer <deployment key>` and
+- Every request other than the agent card and `GET /health` **must** carry `Authorization: Bearer <deployment key>` and
   `X-Vessel-User: <opaque user id>` (1 to 128 characters of `A-Za-z0-9._:@-`). Missing or invalid
   values get HTTP 401.
 - Every conversation and task is bound to the user that created it. Reading, listing, continuing,

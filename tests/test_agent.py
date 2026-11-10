@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 
 from conftest import text_reply, tool_reply
 
@@ -83,6 +84,8 @@ async def test_cancel_during_a_tool_closes_the_history(package_dir, model):
     assert events[-1]["type"] == "turn.finished" and events[-1]["status"] == "cancelled"
     roles = [m["role"] for m in turn.new_messages]
     assert roles[-2:] == ["tool", "assistant"]
+    kinds = [e["type"] for e in events]
+    assert kinds.count("tool.started") == kinds.count("tool.finished") == 1
 
 
 async def test_cancel_before_the_model_answers(package_dir, model):
@@ -129,3 +132,45 @@ async def test_null_tool_output_fields_do_not_break_the_loop(package_dir, model)
     result = await run(turn)
     assert result["status"] == "ok"
     assert not next(e for e in events if e["type"] == "tool.finished")["error"]
+
+
+async def test_non_finite_numbers_in_arguments_are_refused(package_dir, model):
+    model.replies = [tool_reply("read", '{"path": "x", "offset": NaN}'), text_reply("ok")]
+    turn, events = make_turn(package_dir, model)
+    result = await run(turn)
+    finished = next(e for e in events if e["type"] == "tool.finished")
+    assert result["status"] == "ok" and finished["error"] and "valid JSON" in finished["output"]
+
+
+async def test_lone_surrogates_from_the_model_are_replaced(package_dir, model):
+    model.replies = [text_reply("bad \ud800 text")]
+    turn, events = make_turn(package_dir, model)
+    result = await run(turn)
+    assert result["text"] == "bad ? text"
+    json.dumps(events).encode("utf-8")
+
+
+async def test_a_crashing_tool_reports_a_generic_error(package_dir, model, monkeypatch):
+    model.replies = [tool_reply("bash", {"command": "true"}), text_reply("ok")]
+    turn, events = make_turn(package_dir, model)
+
+    async def explode(*_a):
+        raise RuntimeError("secret-dsn://user:pw@db")
+
+    monkeypatch.setattr(turn.runner, "run", explode)
+    result = await run(turn)
+    finished = next(e for e in events if e["type"] == "tool.finished")
+    assert result["status"] == "ok" and finished["output"] == "bash failed"
+    assert "secret-dsn" not in json.dumps(events)
+
+
+async def test_an_unexpected_failure_still_finishes_the_turn(package_dir, model, monkeypatch):
+    turn, events = make_turn(package_dir, model)
+
+    async def explode(*_a):
+        raise RuntimeError("secret-dsn://user:pw@db")
+
+    monkeypatch.setattr(turn, "_loop", explode)
+    result = await run(turn)
+    assert result["status"] == "model_error" and events[-1]["type"] == "turn.finished"
+    assert "secret-dsn" not in json.dumps(events)

@@ -43,7 +43,9 @@ def create_app():
         return PERSONAS.get(str(value or ""))
 
     async def index(_request: Request) -> FileResponse:
-        return FileResponse(HERE / "static" / "index.html", headers={"Cache-Control": "no-store"})
+        # Images only from this page, so model-written Markdown cannot send data out through an image URL.
+        return FileResponse(HERE / "static" / "index.html",
+                            headers={"Cache-Control": "no-store", "Content-Security-Policy": "img-src 'self' data:"})
 
     async def meta(_request: Request) -> JSONResponse:
         card = await client.card()

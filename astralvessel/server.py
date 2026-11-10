@@ -28,6 +28,7 @@ from a2a.types import (
     AgentSkill,
     Message,
     Part,
+    Role,
     Task,
     TaskState,
     TaskStatus,
@@ -51,6 +52,9 @@ from .store import Store
 log = logging.getLogger("astralvessel")
 USER_HEADER = "x-vessel-user"
 USER_ID = re.compile(r"^[A-Za-z0-9._:@-]{1,128}$")
+CONVERSATION_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
+MAX_MESSAGE_CHARS = 100_000
+MAX_BODY_BYTES = 1_000_000
 SCOPE_KEY = "vessel_owner"
 STORED_SKIP = {ev.TEXT_DELTA, ev.REASONING_DELTA}
 
@@ -132,7 +136,11 @@ class VesselExecutor(AgentExecutor):
         if not text:
             await updater.reject(self._note(updater, "send a text message"))
             return
-        if not await self.store.claim(owner, conversation_id, text):
+        if len(text) > MAX_MESSAGE_CHARS:
+            await updater.reject(self._note(updater, f"messages are limited to {MAX_MESSAGE_CHARS} characters"))
+            return
+        valid_id = CONVERSATION_ID.fullmatch(conversation_id or "")
+        if not valid_id or not await self.store.claim(owner, conversation_id, text):
             await updater.reject(self._note(updater, "unknown conversation"))
             return
         await updater.start_work()
@@ -215,6 +223,25 @@ def agent_card(settings: Settings) -> AgentCard:
     )
 
 
+class VesselTaskStore(InMemoryTaskStore):
+    # The SDK's in-memory store keeps every streamed status message in task history and never forgets a task.
+    # This keeps only the user's messages in history and drops a conversation's tasks when it is deleted.
+
+    async def save(self, task: Task, context) -> None:
+        keep = [m for m in task.history if m.role == Role.ROLE_USER]
+        if len(keep) != len(task.history):
+            del task.history[:]
+            task.history.extend(keep)
+        await super().save(task, context)
+
+    def forget(self, owner: str, conversation_id: str) -> None:
+        impl = self._impl
+        with impl.lock:
+            owned = impl.tasks.get(owner, {})
+            for task_id in [t.id for t in owned.values() if t.context_id == conversation_id]:
+                del owned[task_id]
+
+
 def authenticate(settings: Settings, request: Request) -> str | None:
     supplied = request.headers.get("authorization", "")
     if not supplied.startswith("Bearer "):
@@ -233,15 +260,16 @@ def create_app(settings: Settings | None = None, runner: ToolRunner | None = Non
     package = settings.package
     if runner is None:
         if settings.sandbox_url:
-            runner = RemoteRunner(settings.sandbox_url, settings.sandbox_token or "",
-                                  package.manifest.sandbox.tool_timeout_seconds)
+            longest = max([package.manifest.sandbox.tool_timeout_seconds] +
+                          [t.timeout_seconds or 0 for t in package.declared])
+            runner = RemoteRunner(settings.sandbox_url, settings.sandbox_token or "", longest)
         else:
             log.warning("no VESSEL_SANDBOX_URL: tools run in-process, which is for development only")
             runner = LocalRunner(package)
     executor = VesselExecutor(settings, store, runner, model_transport)
     card = agent_card(settings)
-    handler = DefaultRequestHandler(agent_executor=executor, agent_card=card,
-                                    task_store=InMemoryTaskStore(owner_resolver=lambda c: c.user.user_name))
+    tasks = VesselTaskStore(owner_resolver=lambda c: c.user.user_name)
+    handler = DefaultRequestHandler(agent_executor=executor, agent_card=card, task_store=tasks)
 
     def unauthorized() -> JSONResponse:
         return JSONResponse({"error": "authentication required"}, status_code=401)
@@ -255,6 +283,8 @@ def create_app(settings: Settings | None = None, runner: ToolRunner | None = Non
                                          "error": {"code": -32001, "message": "authentication required"}},
                                         status_code=401)
                 return unauthorized()
+            if int(request.headers.get("content-length") or 0) > MAX_BODY_BYTES:
+                return JSONResponse({"error": "request too large"}, status_code=413)
             request.scope[SCOPE_KEY] = owner
             return await endpoint(request)
         return wrapper
@@ -266,6 +296,7 @@ def create_app(settings: Settings | None = None, runner: ToolRunner | None = Non
         owner, cid = request.scope[SCOPE_KEY], request.path_params["cid"]
         if request.method == "DELETE":
             if await store.delete(owner, cid):
+                tasks.forget(owner, cid)
                 return JSONResponse({"deleted": True})
             return JSONResponse({"error": "not found"}, status_code=404)
         found = await store.get(owner, cid)
@@ -298,7 +329,8 @@ def create_app(settings: Settings | None = None, runner: ToolRunner | None = Non
             while True:
                 await asyncio.sleep(3600)
                 with contextlib.suppress(Exception):
-                    await store.sweep(settings.idle_hours * 3600)
+                    for owner, cid in await store.sweep(settings.idle_hours * 3600):
+                        tasks.forget(owner, cid)
         sweeper = asyncio.create_task(janitor())
         try:
             yield
