@@ -1,0 +1,29 @@
+# The demo app, added on top of the generated deployment: it joins the vessel's front network and keeps the
+# conversation history itself. Start both with:
+#   docker compose -f compose.generated.yml -f compose.demo.yml --env-file .env up -d --build
+services:
+  demo:
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    restart: unless-stopped
+    build:
+      context: ..
+      dockerfile: demo/Dockerfile
+    environment:
+      VESSEL_URL: http://vessel:8700
+      VESSEL_APP_KEY: ${VESSEL_APP_KEY:?set VESSEL_APP_KEY in deploy/.env}
+      DEMO_HISTORY: /data/history.sqlite
+    volumes:
+      - demo_data:/data
+    networks: [front, outside]
+    ports:
+      - "127.0.0.1:${DEMO_PORT:-8790}:8790"
+      - "${DEMO_TAILSCALE_IP:-127.0.0.1}:${DEMO_PORT:-8790}:8790"
+    tmpfs:
+      - /tmp:size=64m,noexec,nosuid,nodev,mode=1777
+    mem_limit: 512m
+    depends_on: [vessel]
+
+volumes:
+  demo_data:

@@ -1,5 +1,5 @@
-# Conversation store in one SQLite file; every read and write is keyed by the owning user.
-# A conversation that belongs to someone else behaves exactly like one that does not exist.
+# An application-side conversation store in one SQLite file, keyed by the owning user; the vessel itself keeps none.
+# Apps send history() with each turn and record_turn() the transcript messages that come back.
 
 from __future__ import annotations
 
@@ -26,7 +26,7 @@ CREATE INDEX IF NOT EXISTS turns_conversation ON turns(conversation_id, seq);
 """
 
 
-class Store:
+class HistoryStore:
     def __init__(self, path: str | Path):
         self.path = str(path)
         if self.path != ":memory:":
@@ -68,9 +68,7 @@ class Store:
             messages: list[dict[str, Any]] = []
             for row in self._db.execute("SELECT messages FROM turns WHERE conversation_id = ? ORDER BY seq",
                                         (conversation_id,)):
-                for message in json.loads(row["messages"]):
-                    message.pop("reasoning_content", None)
-                    messages.append(message)
+                messages.extend(json.loads(row["messages"]))
             return messages
         return await self._run(work)
 

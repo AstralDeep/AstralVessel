@@ -1,10 +1,11 @@
-# The demo app in front of a Vessel: it holds the deployment key, picks a demo persona, and relays turns to the browser.
+# The demo app in front of a Vessel: it holds the app key, keeps each persona's conversations, and relays turns.
 # It renders primitives with AstralProjection's own web renderer, so the preview is exactly what Astral would show.
 
 from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 from typing import Any
 
@@ -14,13 +15,17 @@ from starlette.responses import FileResponse, JSONResponse, StreamingResponse
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from astralvessel.client import VesselClient
+from astralvessel.client import VesselClient, transcript_of
+from astralvessel.history import HistoryStore, new_id
 
 HERE = Path(__file__).parent
 PERSONAS = {
     "alice": {"id": "demo:alice", "name": "Alice", "role": "Research administrator"},
     "bob": {"id": "demo:bob", "name": "Bob", "role": "Faculty member"},
 }
+AGENT = os.environ.get("DEMO_AGENT", "nexus")
+SKIPPED = {"text.delta", "reasoning.delta", "transcript"}
+CONVERSATION_ID = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
 def projection_static() -> Path | None:
@@ -38,6 +43,7 @@ def render_primitives(components: list[dict[str, Any]]) -> str:
 
 def create_app():
     client = VesselClient(os.environ.get("VESSEL_URL", "http://vessel:8700"), os.environ["VESSEL_APP_KEY"])
+    history = HistoryStore(os.environ.get("DEMO_HISTORY", "./demo-data/history.sqlite"))
 
     def persona(value: Any) -> dict[str, str] | None:
         return PERSONAS.get(str(value or ""))
@@ -48,16 +54,18 @@ def create_app():
                             headers={"Cache-Control": "no-store", "Content-Security-Policy": "img-src 'self' data:"})
 
     async def meta(_request: Request) -> JSONResponse:
-        card = await client.card()
-        manifest = await client.manifest(PERSONAS["alice"]["id"])
+        card = await client.card(AGENT)
+        manifest = await client.manifest(AGENT, PERSONAS["alice"]["id"])
+        manifest["tools"] = list(manifest.get("tools") or {})
         return JSONResponse({"card": card, "manifest": manifest, "personas": PERSONAS,
+                             "agents": await client.agents(PERSONAS["alice"]["id"]),
                              "projection": projection_static() is not None})
 
     async def conversations(request: Request) -> JSONResponse:
         who = persona(request.query_params.get("persona"))
         if who is None:
             return JSONResponse({"error": "unknown persona"}, status_code=400)
-        return JSONResponse({"conversations": await client.conversations(who["id"])})
+        return JSONResponse({"conversations": await history.list(who["id"])})
 
     async def conversation(request: Request) -> JSONResponse:
         who = persona(request.query_params.get("persona"))
@@ -65,9 +73,9 @@ def create_app():
             return JSONResponse({"error": "unknown persona"}, status_code=400)
         cid = request.path_params["cid"]
         if request.method == "DELETE":
-            ok = await client.delete(who["id"], cid)
+            ok = await history.delete(who["id"], cid)
             return JSONResponse({"deleted": ok}, status_code=200 if ok else 404)
-        found = await client.conversation(who["id"], cid)
+        found = await history.get(who["id"], cid)
         return JSONResponse(found) if found else JSONResponse({"error": "not found"}, status_code=404)
 
     async def chat(request: Request) -> StreamingResponse | JSONResponse:
@@ -78,9 +86,36 @@ def create_app():
             return JSONResponse({"error": "a persona and a question of at most 4000 characters are required"},
                                 status_code=400)
 
+        owner = who["id"]
+        cid = str(body.get("conversation_id") or new_id())
+        if not CONVERSATION_ID.fullmatch(cid) or not await history.claim(owner, cid, text):
+            return JSONResponse({"error": "unknown conversation"}, status_code=404)
+        past = await history.history(owner, cid)
+
         async def relay():
-            async for item in client.stream(who["id"], text, body.get("conversation_id") or None):
-                yield f"data: {json.dumps(item)}\n\n"
+            # The app owns history: send it with the turn, then store the transcript messages that come back.
+            events, recorded, answer, finished, task_id = [], [], {}, {}, ""
+            async for item in client.stream(AGENT, owner, text, history=past, conversation_id=cid):
+                events.append(item)
+                kind = item.get("type")
+                task_id = task_id or item.get("task_id") or ""
+                if kind == "answer":
+                    answer = item
+                elif kind == "turn.finished":
+                    finished = item
+                if kind not in SKIPPED:
+                    recorded.append({k: v for k, v in item.items() if k != "raw"})
+                if kind != "transcript":
+                    yield f"data: {json.dumps(item)}\n\n"
+            messages, _turn = transcript_of(events)
+            # Store a turn only if its transcript arrived whole; a cut stream could end mid tool call, and that
+            # prefix would make every later turn's history invalid.
+            if messages and any(e.get("type") == "transcript" and e.get("last") for e in events):
+                result = {k: v for k, v in finished.items() if k not in ("type", "raw", "task_id", "conversation_id",
+                                                                          "state")}
+                result.update(text=answer.get("text", ""), components=answer.get("components", []))
+                result.setdefault("status", "model_error")
+                await history.record_turn(owner, cid, task_id or new_id(), text, result, messages, recorded)
 
         return StreamingResponse(relay(), media_type="text/event-stream",
                                  headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"})
@@ -90,7 +125,7 @@ def create_app():
         who = persona(body.get("persona"))
         if who is None or not body.get("task_id"):
             return JSONResponse({"error": "persona and task_id are required"}, status_code=400)
-        return JSONResponse(await client.cancel(who["id"], str(body["task_id"])))
+        return JSONResponse(await client.cancel(AGENT, who["id"], str(body["task_id"])))
 
     async def render(request: Request) -> JSONResponse:
         body = await request.json()

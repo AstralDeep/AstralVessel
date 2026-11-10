@@ -1,0 +1,35 @@
+# The demo deployment: two agents over the ccts-kg vault, each with its own sandbox, and one app allowed to call both.
+# Run `astralvessel deploy` here to write compose.generated.yml, then start it with docker compose.
+
+[vessel]
+public_url = "http://vessel:8700"
+task_ttl_hours = 24
+
+[egress]
+upstream_url = "https://api-llm-factory.ai.uky.edu/v1"
+upstream_key = "env:VESSEL_UPSTREAM_MODEL_KEY"
+
+[[agents]]
+id = "nexus"
+package = "../examples/nexus"
+[agents.sandbox]
+memory = "4g"
+cpus = 4
+pids = 512
+scratch = "256m"
+mounts = [{ target = "/vault", source = "env:VESSEL_VAULT_DIR" }]
+
+[[agents]]
+id = "vault-reader"
+package = "../examples/vault-reader"
+[agents.sandbox]
+memory = "1g"
+cpus = 1
+pids = 128
+scratch = "64m"
+mounts = [{ target = "/vault", source = "env:VESSEL_VAULT_DIR" }]
+
+[[apps]]
+name = "demo"
+key_sha256 = "env:VESSEL_APP_KEY_SHA256"
+agents = ["nexus", "vault-reader"]

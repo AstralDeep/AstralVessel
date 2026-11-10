@@ -1,4 +1,4 @@
-# A small A2A 1.0 JSON-RPC client for apps in front of a Vessel: stream a turn, cancel it, manage conversations.
+# A small A2A 1.0 JSON-RPC client for apps in front of a Vessel: list agents, stream a turn with its history, cancel.
 # It yields Vessel events decoded from the A2A status and artifact updates, plus the raw frames for inspection.
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from typing import Any
 import httpx
 
 PRIMITIVES_MEDIA_TYPE = "application/vnd.astral.primitives+json"
+TRANSCRIPT_MEDIA_TYPE = "application/vnd.astralvessel.transcript+json"
 
 
 class VesselClient:
@@ -26,21 +27,24 @@ class VesselClient:
     def _user(self, user: str) -> dict[str, str]:
         return {"X-Vessel-User": user}
 
-    async def rpc(self, user: str, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        response = await self._client.post("/a2a", headers={**self._user(user), "A2A-Version": "1.0"},
+    async def rpc(self, agent: str, user: str, method: str, params: dict[str, Any]) -> dict[str, Any]:
+        response = await self._client.post(f"/agents/{agent}/a2a", headers={**self._user(user), "A2A-Version": "1.0"},
                                            json={"jsonrpc": "2.0", "id": uuid.uuid4().hex, "method": method,
                                                  "params": params})
         return response.json()
 
-    async def stream(self, user: str, text: str, conversation_id: str | None = None
-                     ) -> AsyncIterator[dict[str, Any]]:
-        message: dict[str, Any] = {"messageId": uuid.uuid4().hex, "role": "ROLE_USER", "parts": [{"text": text}]}
+    async def stream(self, agent: str, user: str, text: str, *, history: list[dict[str, Any]] | None = None,
+                     conversation_id: str | None = None) -> AsyncIterator[dict[str, Any]]:
+        parts: list[dict[str, Any]] = [{"text": text}]
+        if history:
+            parts.append({"data": {"version": 1, "messages": history}, "mediaType": TRANSCRIPT_MEDIA_TYPE})
+        message: dict[str, Any] = {"messageId": uuid.uuid4().hex, "role": "ROLE_USER", "parts": parts}
         if conversation_id:
             message["contextId"] = conversation_id
         body = {"jsonrpc": "2.0", "id": uuid.uuid4().hex, "method": "SendStreamingMessage",
                 "params": {"message": message}}
         headers = {**self._user(user), "Accept": "text/event-stream", "A2A-Version": "1.0"}
-        async with self._client.stream("POST", "/a2a", headers=headers, json=body) as response:
+        async with self._client.stream("POST", f"/agents/{agent}/a2a", headers=headers, json=body) as response:
             if response.status_code != 200:
                 await response.aread()
                 yield {"type": "error", "status": response.status_code, "detail": response.text[:500]}
@@ -55,26 +59,29 @@ class VesselClient:
                 for item in decode(frame):
                     yield item
 
-    async def cancel(self, user: str, task_id: str) -> dict[str, Any]:
-        return await self.rpc(user, "CancelTask", {"id": task_id})
+    async def cancel(self, agent: str, user: str, task_id: str) -> dict[str, Any]:
+        return await self.rpc(agent, user, "CancelTask", {"id": task_id})
 
-    async def conversations(self, user: str) -> list[dict[str, Any]]:
-        response = await self._client.get("/v1/conversations", headers=self._user(user))
-        return response.json().get("conversations", []) if response.status_code == 200 else []
+    async def agents(self, user: str) -> list[dict[str, Any]]:
+        response = await self._client.get("/v1/agents", headers=self._user(user))
+        return response.json().get("agents", []) if response.status_code == 200 else []
 
-    async def conversation(self, user: str, conversation_id: str) -> dict[str, Any] | None:
-        response = await self._client.get(f"/v1/conversations/{conversation_id}", headers=self._user(user))
-        return response.json() if response.status_code == 200 else None
+    async def manifest(self, agent: str, user: str) -> dict[str, Any]:
+        return (await self._client.get(f"/agents/{agent}/manifest", headers=self._user(user))).json()
 
-    async def delete(self, user: str, conversation_id: str) -> bool:
-        response = await self._client.delete(f"/v1/conversations/{conversation_id}", headers=self._user(user))
-        return response.status_code == 200
+    async def card(self, agent: str) -> dict[str, Any]:
+        return (await self._client.get(f"/agents/{agent}/.well-known/agent-card.json")).json()
 
-    async def manifest(self, user: str) -> dict[str, Any]:
-        return (await self._client.get("/v1/manifest", headers=self._user(user))).json()
 
-    async def card(self) -> dict[str, Any]:
-        return (await self._client.get("/.well-known/agent-card.json")).json()
+def transcript_of(events: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any] | None]:
+    # The messages a turn added, in order, and its closing summary; store the messages to send as later history.
+    messages: list[dict[str, Any]] = []
+    turn = None
+    for item in events:
+        if item.get("type") == "transcript":
+            messages.extend(item["messages"])
+            turn = item.get("turn") or turn
+    return messages, turn
 
 
 def integral(value: Any) -> Any:
@@ -112,7 +119,14 @@ def decode(frame: dict[str, Any]) -> list[dict[str, Any]]:
             text = " ".join(p.get("text", "") for p in parts if "text" in p)
             out.append({"type": "status", "state": status.get("state"), "text": text,
                         "task_id": update.get("taskId"), "raw": frame})
-    if "artifactUpdate" in result:
+    if "artifactUpdate" in result and (result["artifactUpdate"].get("artifact") or {}).get("name") == "transcript":
+        artifact = result["artifactUpdate"]["artifact"]
+        for part in artifact.get("parts") or []:
+            if part.get("mediaType") == TRANSCRIPT_MEDIA_TYPE:
+                body = _data(part) or {}
+                out.append({"type": "transcript", "messages": body.get("messages", []), "turn": body.get("turn"),
+                            "last": bool(result["artifactUpdate"].get("lastChunk")), "raw": frame})
+    elif "artifactUpdate" in result:
         artifact = (result["artifactUpdate"].get("artifact") or {})
         text, components, version = "", [], None
         for part in artifact.get("parts") or []:

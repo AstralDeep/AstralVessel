@@ -10,6 +10,10 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 BUILTIN_TOOLS = ("read", "grep", "glob", "list", "bash", "webfetch", "websearch")
+# Astral's six permission scopes, weakest first; each tool has one and an agent's card carries the strongest.
+SCOPES = ("tools:read", "tools:search", "tools:files", "tools:write", "tools:system", "tools:execute")
+BUILTIN_SCOPES = {"read": "tools:files", "grep": "tools:search", "glob": "tools:files", "list": "tools:files",
+                  "bash": "tools:execute", "webfetch": "tools:search", "websearch": "tools:search"}
 
 
 class Strict(BaseModel):
@@ -30,6 +34,7 @@ class ModelSection(Strict):
     temperature: float = 0.2
     max_steps: int = Field(default=40, ge=1, le=200)
     max_output_tokens: int = Field(default=8192, ge=256)
+    send_reasoning: bool = False
 
 
 class Mount(Strict):
@@ -78,6 +83,7 @@ class DeclaredTool(Strict):
     parameters: dict[str, Any] = {"type": "object", "properties": {}}
     timeout_seconds: int | None = None
     input: Literal["json-stdin", "args"] = "json-stdin"
+    scope: Literal[SCOPES] = "tools:read"
 
 
 class AgentPackage(BaseModel):
@@ -85,6 +91,16 @@ class AgentPackage(BaseModel):
     manifest: Manifest
     prompt: str
     declared: list[DeclaredTool]
+
+    def tool_scopes(self) -> dict[str, str]:
+        scopes = {name: BUILTIN_SCOPES[name] for name in self.manifest.tools.builtin}
+        scopes.update({t.name: t.scope for t in self.declared})
+        if self.manifest.output.primitives:
+            scopes["present"] = "tools:read"
+        return scopes
+
+    def strongest_scope(self) -> str:
+        return max(self.tool_scopes().values(), key=SCOPES.index, default="tools:read")
 
 
 def load_package(path: str | Path) -> AgentPackage:

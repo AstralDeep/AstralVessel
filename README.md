@@ -1,10 +1,10 @@
 # AstralVessel
 
-A lightweight, open agent harness and the standard behind it. AstralVessel runs a language-model agent
-as a self-contained service: it takes questions over **A2A 1.0**, uses any **OpenAI-compatible**
-model, runs the agent's tools in a sealed **sandbox**, reaches the outside world only through an
-**egress** door, and answers in Markdown with optional **AstralPrimitives** so Astral's clients can
-render the result.
+A lightweight, open agent harness and the standard behind it. AstralVessel is a server for agents that
+sits between an application and its model provider: it takes questions over **A2A 1.0**, uses any
+**OpenAI-compatible** model, runs each agent's tools in its own sealed **sandbox**, reaches the outside
+world only through an **egress** door, and answers in Markdown with optional **AstralPrimitives** so
+Astral's clients can render the result.
 
 It is the harness and sandbox parts of [Astral](https://github.com/AstralDeep), packaged so an
 application can use them without running a full Astral instance.
@@ -48,30 +48,45 @@ AstralVessel replaces OpenCode and that scaffolding with one component that is:
 ## How it works
 
 An agent is a folder: a manifest (`vessel.toml`), a briefing (`prompt.md`), and optional declared
-tools, each a small TOML file wrapping a command. The harness serves that folder as one agent.
+tools, each a small TOML file wrapping a command. A deployment file (`deployment.toml`) lists the
+agents one vessel serves, the sandbox each one gets, and which applications may call which agents.
+The agent declares what it needs; the deployment file is the only place access is granted.
 
-![Diagram of who holds what. The app holds the deployment key and names each user with X-Vessel-User; it is also on an outside network for its users' browsers. It calls the vessel over A2A 1.0. The vessel runs the agent loop and holds each user's conversations, but never has the model key. It calls the sandbox over /run (HTTP); the sandbox runs the tools on read-only data and never has network, secrets, conversations, or a route to the vessel's API. The vessel reaches the egress over the OpenAI-compatible API, which is also the web proxy for webfetch and websearch. The egress holds the model key, reaches only public addresses on ports 80 and 443, and calls the model over HTTPS: GLM 5.3 on the UK LLM Factory, or any OpenAI-compatible model. Everything except the egress's outbound link and the app's browser-facing side sits on internal Docker networks with no route out.](assets/who-holds-what.svg)
+![Diagram of who holds what. The app holds its key and its users' conversation history, names each user with X-Vessel-User, and is also on an outside network for its users' browsers. It calls the vessel over A2A 1.0. The vessel serves every agent and runs the agent loop; it holds only runs in flight, never conversation history or the model key. It calls each agent's sandbox over /run (HTTP); there is one sandbox per agent, which runs the tools on read-only data and never has network, secrets, history, or a route to the vessel's API. The vessel reaches the egress over the OpenAI-compatible API, which is also the web proxy for webfetch and websearch. The egress holds the model key, reaches only public addresses on ports 80 and 443, and calls the model over HTTPS: GLM 5.3 on the UK LLM Factory, or any OpenAI-compatible model. Everything except the egress's outbound link and the app's browser-facing side sits on internal Docker networks with no route out.](assets/who-holds-what.svg)
 
-- **The app** (here, the demo) holds a deployment key. It names each end user with an `X-Vessel-User`
-  header, and every conversation is bound to the user who started it.
-- **The vessel** runs the agent loop: ask the model, run the tool it asks for, return the result,
-  repeat. It streams every step as A2A events, keeps conversations in SQLite, and enforces step
-  limits, deadlines and cancellation.
-- **The sandbox** runs the file, shell and declared tools. It is a separate container with no network
-  route, no conversation store, no secrets, a read-only root, and the data mounted read-only. A hostile
-  command cannot read other users' conversations or the model key, and it cannot reach the harness API.
+- **The app** holds its own key, which the deployment limits to certain agents. It names each end user
+  with an `X-Vessel-User` header; every task is bound to that app and user. The app owns conversation
+  history: it sends the history with each turn and stores the messages that come back.
+- **The vessel** serves every agent in the deployment, each with its own A2A address and agent card.
+  It runs the agent loop (ask the model, run the tool it asks for, return the result, repeat), streams
+  every step as A2A events, and streams the turn's messages as a transcript in OpenAI chat format. It
+  keeps only runs in flight, and enforces step limits, deadlines and cancellation. Agent briefings are
+  fixed at setup: history from the app may never carry a system message.
+- **Each agent's sandbox** is a separate container that runs its file, shell and declared tools. It has
+  no network route, no secrets, no history, a read-only root, and its data mounted read-only. Inside
+  it, every tool call runs under Landlock and a seccomp filter with its own scratch directory: a call
+  cannot read another call's files, see other processes, signal them, make socket files, use shared
+  memory or message queues, or open network sockets. Mounts are read-only for now. Users can share an
+  agent without seeing each other.
 - **The egress** is the only way out. It adds the model key, so the harness never holds it. Its
   web proxy reaches only globally routable addresses on ports 80 and 443.
+
+Nothing in the running system controls Docker. `astralvessel deploy` turns `deployment.toml` into a
+Compose file, the operator starts it, and the vessel serves an agent only once its sandbox reports that
+it is confined and was started from the current deployment file (a profile fingerprint set at deploy
+time, so an edited deployment that was not redeployed is caught).
 
 ## What is here
 
 | Path | What |
 |---|---|
-| `astralvessel/` | The reference harness: agent loop, model adapter, tools, sandbox runner, SQLite sessions, A2A server, client |
+| `astralvessel/` | The harness: agent loop, model adapter, tools, Landlock confinement, sandbox server, A2A server, deployment loader, Compose generator, client |
+| `astralvessel/history.py` | An application-side conversation store, for apps that want one (the demo uses it) |
 | `egress/` | The egress container: model passthrough that holds the key, and the guarded web proxy |
 | `examples/nexus/` | The research nexus agent over the ccts-kg vault, with two declared tools |
-| `demo/` | An interactive demo app that sits in front of a Vessel and shows each turn's steps, A2A frames and isolation |
-| `deploy/` | Docker Compose deployment, `.env.example`, and `verify-isolation.sh` |
+| `examples/vault-reader/` | A second, read-only agent over the same vault, with no shell or web access |
+| `demo/` | An interactive demo app that keeps its personas' history and shows each turn's steps and A2A frames |
+| `deploy/` | The demo `deployment.toml`, the demo app's Compose overlay, `.env.example`, and `verify-isolation.sh` |
 | `conformance/run.py` | Conformance checks: what any harness claiming to follow the standard must pass |
 | `tests/` | Unit and service tests with a scripted model |
 
@@ -79,14 +94,19 @@ tools, each a small TOML file wrapping a command. The harness serves that folder
 
 ```bash
 cp deploy/.env.example deploy/.env      # fill in the model key, app key and its sha256, sandbox token, vault path
-cd deploy && docker compose up -d --build
-./verify-isolation.sh                    # 18 isolation probes from inside the containers
+cd deploy
+astralvessel deploy deployment.toml      # (installed as in Develop) writes compose.generated.yml and sandbox tokens
+docker compose -f compose.generated.yml -f compose.demo.yml --env-file .env up -d --build
+./verify-isolation.sh                    # 28 isolation probes from inside the containers
 set -a; . ./.env; set +a
-docker compose run --rm --no-deps -T -v "$PWD/../conformance:/conformance:ro" demo \
-  python /conformance/run.py http://vessel:8700 "$VESSEL_APP_KEY"   # 19 conformance checks
+for agent in nexus vault-reader; do
+  docker compose -f compose.generated.yml -f compose.demo.yml --env-file .env run --rm --no-deps -T \
+    -v "$PWD/../conformance:/conformance:ro" demo python /conformance/run.py http://vessel:8700 "$VESSEL_APP_KEY" $agent
+done                                     # 20 conformance checks per agent
 ```
 
-The demo listens on `127.0.0.1:8790` and on `DEMO_TAILSCALE_IP:8790`.
+The demo listens on `127.0.0.1:8790` and on `DEMO_TAILSCALE_IP:8790`. Sandboxes need a Linux kernel
+with Landlock ABI 6 or newer (6.12+); without it they refuse to start.
 
 ## Develop
 
@@ -96,25 +116,28 @@ uv pip install -e ../AstralDeep/components/AstralPrimitives      # optional: val
 .venv/bin/python -m pytest -q
 ```
 
-Without `VESSEL_SANDBOX_URL` the harness runs tools in its own process. That mode is for tests only:
-never point a model at it.
+Without `VESSEL_SANDBOX_URL_TEMPLATE` the vessel runs tools in its own process, unconfined. That mode
+is for tests only: never point a model at it.
 
 ## Status
 
-Version 0.1, built November 2026. Done:
+Version 0.2, November 2026. Done:
 
-- the harness, the sandbox and egress deployment, and the A2A profile
-- owner binding, cancellation, and primitives output rendered by AstralProjection
-- the nexus example and the interactive demo
-- 39 tests, 18 isolation probes, 19 conformance checks, and an adversarial security pass
+- one vessel serving many agents, each with its own sandbox, card and A2A address
+- `deployment.toml`, per-app keys, and Compose generated by `astralvessel deploy`
+- per-call confinement inside each sandbox (Landlock and seccomp)
+- application-owned history, with transcripts streamed in OpenAI chat format
+- a task store that survives restarts, owner binding, cancellation, and AstralPrimitives output
+- 46 tests, 28 isolation probes, 20 conformance checks per agent, and an independent security review
 
 Not yet:
 
-- InFocus-Agent on AstralVessel
-- MCP tool servers
-- a fresh sandbox per conversation (until then, users share one sandbox's scratch space and process list)
-- a cap on conversation history length
-- running the research nexus's own end-to-end suite against it
+- jobs: submitting without holding a stream open, completion callbacks, structured results
+- pausing a turn for approval or a policy check before a tool runs
+- file input and output, usage and audit export, signed user identity
+- an admin API and a launcher that starts sandboxes at runtime
+- stronger isolation tiers (gVisor, microVMs), and MCP tool servers
+- InFocus-Agent on AstralVessel, and the research nexus's own end-to-end suite against it
 
 For now AstralVessel is an independent project. Whether and how it joins AstralDeep is an open
 question for the Astral maintainers.
