@@ -9,6 +9,8 @@ render the result.
 It is the harness and sandbox parts of [Astral](https://github.com/AstralDeep), packaged so an
 application can use them without running a full Astral instance.
 
+![Diagram: on the left, a full Astral instance with its web, Windows, Android and Apple clients, accounts and sign-in, an agent catalog of many agents, and a highlighted harness and sandbox. On the right, one app such as the research nexus, using AstralVessel: one agent folder (vessel.toml, prompt.md, tools/) plus a harness, sandbox and egress. A solid arrow from left to right reads "used on its own"; a dashed arrow back reads "could slot back in later".](assets/lifted-out.svg)
+
 ## Why it exists
 
 Astral is a centralized platform: one deployment serves many users, many agents, and Astral's own web,
@@ -48,12 +50,7 @@ AstralVessel replaces OpenCode and that scaffolding with one component that is:
 An agent is a folder: a manifest (`vessel.toml`), a briefing (`prompt.md`), and optional declared
 tools, each a small TOML file wrapping a command. The harness serves that folder as one agent.
 
-```
-browser ─▶ app ──A2A 1.0──▶ vessel (loop, sessions) ──HTTP──▶ sandbox (tools, read-only data, no network)
-          holds the key          │
-                                 └──▶ egress ──HTTPS──▶ model (GLM 5.3 on the UK LLM Factory)
-                                      adds the model key; guarded proxy for webfetch/websearch
-```
+![Diagram of who holds what. The app holds the deployment key and names each user with X-Vessel-User; it is also on an outside network for its users' browsers. It calls the vessel over A2A 1.0. The vessel runs the agent loop and holds each user's conversations, but never has the model key. It calls the sandbox over /run (HTTP); the sandbox runs the tools on read-only data and never has network, secrets, conversations, or a route to the vessel's API. The vessel reaches the egress over the OpenAI-compatible API, which is also the web proxy for webfetch and websearch. The egress holds the model key, reaches only public addresses on ports 80 and 443, and calls the model over HTTPS: GLM 5.3 on the UK LLM Factory, or any OpenAI-compatible model. Everything except the egress's outbound link and the app's browser-facing side sits on internal Docker networks with no route out.](assets/who-holds-what.svg)
 
 - **The app** (here, the demo) holds a deployment key. It names each end user with an `X-Vessel-User`
   header, and every conversation is bound to the user who started it.
