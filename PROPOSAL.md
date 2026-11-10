@@ -430,9 +430,9 @@ production, which is a smaller ask of Sam than redesigning Deep's core up front.
 - **Answer quality must not drop.** OpenCode's prompts and loop details have been tuned by many
   users. Nexus's end-to-end suite and InFocus's smoke tests are the bar; if Vessel answers worse on
   them, it does not ship.
-- **Repo home.** Evan's GitHub account cannot create repositories in the AstralDeep organization.
-  Either Sam creates `AstralDeep/AstralVessel` (private until the proposal settles), or it starts
-  in Kentucky-Open-Science and transfers later.
+- **Repo home.** Evan's GitHub account cannot create repositories in the AstralDeep organization, so
+  the repository lives in Kentucky-Open-Science (private) and can transfer to AstralDeep later if Sam
+  agrees.
 - **Sam's buy-in on the primitives contract.** The primitives media type and schema export touch
   AstralPrimitives. That needs Sam's agreement before M4.
 - **Collaborators.** uk-knowledgegraph and InFocus-Agent have other contributors (Mitch, Caroline,
