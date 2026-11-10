@@ -29,6 +29,16 @@ def _env_ref(value: str) -> str:
     return value
 
 
+def _source(deployment: Deployment, source: str) -> str:
+    # "volume:NAME" is an existing Docker volume (for data another stack writes); a relative path is relative to
+    # the deployment file, like an agent's package path.
+    if source.startswith("volume:"):
+        return source[7:]
+    if source.startswith("env:") or os.path.isabs(source):
+        return _env_ref(source)
+    return str((deployment.path.parent / source).resolve())
+
+
 def _image(repo_root: Path | None, dockerfile: str = "Dockerfile", tag: str = IMAGE) -> dict[str, Any]:
     if repo_root is None:
         return {"image": tag}
@@ -48,9 +58,12 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
         # Listen only on the front network, so no sandbox (each shares a tools network with the vessel) can reach it.
         "VESSEL_HOST": deployment.vessel.front_address,
     }
-    for app in deployment.apps:
-        if app.key_sha256.startswith("env:"):
-            vessel_env[app.key_sha256[4:]] = _env_ref(app.key_sha256)
+    secrets = [app.key_sha256 for app in deployment.apps] + [
+        value for agent in deployment.agents.values() for grant in agent.services.values()
+        for value in (grant.url, *grant.headers.values())]
+    for value in secrets:
+        if value.startswith("env:"):
+            vessel_env[value[4:]] = _env_ref(value)
     services: dict[str, Any] = {
         "egress": {**HARDENED, **_image(repo_root and repo_root / "egress", tag="astralvessel-egress:local"),
                    "environment": {"LLM_BASE_URL": deployment.egress.upstream_url,
@@ -70,9 +83,18 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
         vessel_networks[tools] = {}
         vessel_volumes.append(f"{agent.host_package}:/agents/{agent_id}:ro")
         mounts = [f"{agent.host_package}:/agent:ro"] + [
-            f"{_env_ref(m.source)}:{m.target}:{'ro' if m.read_only else 'rw'}" for m in agent.profile.mounts]
+            f"{_source(deployment, m.source)}:{m.target}:{'ro' if m.read_only else 'rw'}" for m in agent.profile.mounts]
+        dockerfile = agent.package.manifest.sandbox.dockerfile
+        if dockerfile:
+            # The agent's own image, built FROM the AstralVessel image (named "astralvessel" in its Dockerfile).
+            base = "service:vessel" if repo_root else f"docker-image://{IMAGE}"
+            image = {"image": f"astralvessel-sandbox-{agent_id}:local",
+                     "build": {"context": str(agent.host_package), "dockerfile": dockerfile,
+                               "additional_contexts": {"astralvessel": base}}}
+        else:
+            image = _image(repo_root)
         services[f"sandbox-{agent_id}"] = {
-            **HARDENED, **_image(repo_root),
+            **HARDENED, **image,
             "command": ["astralvessel", "sandbox"],
             "environment": {"VESSEL_PACKAGE": "/agent", "VESSEL_PORT": str(SANDBOX_PORT),
                             "VESSEL_PROFILE_HASH": agent.fingerprint},
@@ -92,7 +114,12 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
         "mem_limit": "1g", "pids_limit": 256,
         "depends_on": ["egress", *(f"sandbox-{a}" for a in deployment.agents)],
     }
-    return {"name": "astralvessel", "services": services, "networks": networks, "volumes": {"vessel_data": {}}}
+    volumes: dict[str, Any] = {"vessel_data": {}}
+    for agent in deployment.agents.values():
+        for mount in agent.profile.mounts:
+            if mount.source.startswith("volume:"):
+                volumes[mount.source[7:]] = {"external": True}
+    return {"name": "astralvessel", "services": services, "networks": networks, "volumes": volumes}
 
 
 def write(deployment: Deployment, out: Path, *, repo_root: Path | None, master_token: str) -> list[Path]:

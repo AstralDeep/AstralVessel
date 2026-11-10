@@ -29,7 +29,7 @@ async def run(turn, text="question"):
 
 
 async def test_tool_round_trip_and_event_order(package_dir, model):
-    model.replies = [tool_reply("read", {"path": "wiki/person-ada-lovelace.md"}), text_reply("Ada built it.")]
+    model.replies = [tool_reply("read", {"path": "notes/ada-lovelace.md"}), text_reply("Ada built it.")]
     turn, events = make_turn(package_dir, model)
     result = await run(turn)
     assert result["status"] == "ok" and result["text"] == "Ada built it." and result["steps"] == 2

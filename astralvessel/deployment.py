@@ -47,10 +47,34 @@ class SandboxProfile(Strict):
     scratch: str = "256m"
 
 
+class ServiceGrant(Strict):
+    # An application endpoint the vessel calls for the agent's service tools; values may be "env:NAME".
+    url: str
+    headers: dict[str, str] = {}
+
+    @model_validator(mode="after")
+    def plain(self) -> ServiceGrant:
+        if any(name.lower().startswith("x-vessel-") for name in self.headers):
+            raise ValueError("X-Vessel-* headers are set by the vessel and may not be granted")
+        if not self.url.startswith("env:"):
+            check_service_url(self.url)
+        return self
+
+
+def check_service_url(url: str) -> str:
+    # The tool's path is appended, so a query or fragment here would swallow it.
+    if not url.startswith(("http://", "https://")) or "?" in url or "#" in url:
+        raise ValueError(f"service url {url!r} must be http(s) with no query or fragment")
+    return url
+
+
 class AgentEntry(Strict):
     id: str = Field(pattern=AGENT_ID)
     package: str
     sandbox: SandboxProfile = SandboxProfile()
+    services: dict[str, ServiceGrant] = {}
+    # Extra briefing files from the package, appended after prompt.md: one package can serve as several agents.
+    prompt_append: list[str] = []
 
 
 class AppEntry(Strict):
@@ -86,12 +110,16 @@ class Agent(BaseModel):
     package: AgentPackage
     host_package: Path
     profile: SandboxProfile
+    services: dict[str, ServiceGrant] = {}
+    prompt_append: tuple[str, ...] = ()
 
     @property
     def fingerprint(self) -> str:
         # Everything that shapes the sandbox container; a change means the operator must redeploy it.
         sandbox = self.package.manifest.sandbox.model_dump()
-        body = {"id": self.id, "profile": self.profile.model_dump(), "needs": sandbox, "schema": 1}
+        dockerfile = self.package.manifest.sandbox.dockerfile
+        image = build_inputs_hash(self.package.root, dockerfile) if dockerfile else None
+        body = {"id": self.id, "profile": self.profile.model_dump(), "needs": sandbox, "image": image, "schema": 1}
         return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -113,11 +141,21 @@ def load_deployment(path: str | Path, packages_root: str | None = None) -> Deplo
         host = (path.parent / entry.package).resolve()
         package = load_package(Path(packages_root) / entry.id if packages_root else host)
         _check_grants(entry, package)
-        agents[entry.id] = Agent(id=entry.id, package=package, host_package=host, profile=entry.sandbox)
+        for name in entry.prompt_append:
+            target = (package.root / name).resolve()
+            if not target.is_file() or package.root not in target.parents:
+                raise ValueError(f"agent {entry.id}: prompt_append {name} must be a file inside the package")
+        agents[entry.id] = Agent(id=entry.id, package=package, host_package=host, profile=entry.sandbox,
+                                 services=entry.services, prompt_append=tuple(entry.prompt_append))
     return Deployment(path=path, vessel=raw.vessel, egress=raw.egress, agents=agents, apps=raw.apps)
 
 
 def _check_grants(entry: AgentEntry, package: AgentPackage) -> None:
+    missing_services = sorted(package.services() - set(entry.services))
+    extra_services = sorted(set(entry.services) - package.services())
+    if missing_services or extra_services:
+        raise ValueError(f"agent {entry.id}: services must match its tools; missing "
+                         f"{', '.join(missing_services) or 'none'}, unused {', '.join(extra_services) or 'none'}")
     needs = {m.target: m for m in package.manifest.sandbox.mounts}
     grants = {m.target: m for m in entry.sandbox.mounts}
     missing = sorted(set(needs) - set(grants))
@@ -131,6 +169,23 @@ def _check_grants(entry: AgentEntry, package: AgentPackage) -> None:
         if not need.read_only or not grants[target].read_only:
             raise ValueError(f"agent {entry.id}: writable mounts ({target}) are not supported yet; mounts are "
                              "read-only and each call writes only its own scratch directory")
+
+
+def build_inputs_hash(root: Path, dockerfile: str) -> str:
+    # The Dockerfile plus every package file its COPY and ADD lines bring in, so editing one marks the sandbox stale.
+    digest = hashlib.sha256((root / dockerfile).read_bytes())
+    for line in (root / dockerfile).read_text().splitlines():
+        words = line.split()
+        if not words or words[0].upper() not in ("COPY", "ADD"):
+            continue
+        sources = [w for w in words[1:-1] if not w.startswith("--")]
+        for source in sources:
+            for path in sorted(root.glob(source.lstrip("/"))):
+                files = sorted(p for p in path.rglob("*") if p.is_file()) if path.is_dir() else [path]
+                for file in files:
+                    if root in file.resolve().parents:
+                        digest.update(str(file.relative_to(root)).encode() + b"\0" + file.read_bytes())
+    return digest.hexdigest()
 
 
 def resolve(value: str) -> str:

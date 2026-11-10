@@ -68,8 +68,8 @@ def package_dir(tmp_path: Path) -> Path:
     root = tmp_path / "agent"
     (root / "tools").mkdir(parents=True)
     work = tmp_path / "work"
-    (work / "wiki").mkdir(parents=True)
-    (work / "wiki" / "person-ada-lovelace.md").write_text("---\ntitle: Ada Lovelace\n---\n# Ada\nAnalytical engine.\n")
+    (work / "notes").mkdir(parents=True)
+    (work / "notes" / "ada-lovelace.md").write_text("---\ntitle: Ada Lovelace\n---\n# Ada\nAnalytical engine.\n")
     (root / "prompt.md").write_text("You are a test agent.")
     (root / "tools" / "echo.toml").write_text(
         'name = "echo"\ndescription = "Echo the input"\ncommand = ["python3", "-c", '

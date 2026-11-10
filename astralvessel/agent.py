@@ -43,10 +43,10 @@ def tool_specs(package: AgentPackage) -> list[dict[str, Any]]:
     return specs
 
 
-def system_prompt(package: AgentPackage) -> str:
+def system_prompt(package: AgentPackage, extra: tuple[str, ...] = ()) -> str:
     sandbox = package.manifest.sandbox
     mounts = "".join(f"\n- {m.target} ({'read-only' if m.read_only else 'writable'})" for m in sandbox.mounts)
-    lines = [package.prompt.strip(), "", "## Environment", f"Today is {date.today().isoformat()}.",
+    lines = [package.briefing(extra), "", "## Environment", f"Today is {date.today().isoformat()}.",
              f"Tool commands run in {sandbox.workdir}."]
     if mounts:
         lines.append("Mounted data:" + mounts)
@@ -60,8 +60,13 @@ def system_prompt(package: AgentPackage) -> str:
 
 class Turn:
     def __init__(self, package: AgentPackage, model: ModelClient, runner: ToolRunner, emit: Emit,
-                 on_message: OnMessage | None = None):
+                 on_message: OnMessage | None = None, services: Any = None, owner: str = "",
+                 prompt_append: tuple[str, ...] = ()):
         self.package = package
+        self.prompt_append = prompt_append
+        self.services = services
+        self.owner = owner
+        self.declared = {t.name: t for t in package.declared}
         self.on_message = on_message
         self._sent = 0
         self.model = model
@@ -76,10 +81,11 @@ class Turn:
         self.steps = 0
         self.answer = ""
 
-    async def run(self, history: list[dict[str, Any]], user_text: str, *, conversation_id: str,
-                  turn_id: str) -> dict[str, Any]:
+    async def run(self, history: list[dict[str, Any]], user_content: str | list[dict[str, Any]], *,
+                  conversation_id: str, turn_id: str) -> dict[str, Any]:
+        # user_content is the message text, or OpenAI content parts when the user attached images.
         started = time.monotonic()
-        self.new_messages.append({"role": "user", "content": user_text})
+        self.new_messages.append({"role": "user", "content": user_content})
         await self.emit(ev.event(ev.TURN_STARTED, conversation_id=conversation_id, turn_id=turn_id))
         status, error = ev.STATUS_OK, None
         try:
@@ -114,7 +120,8 @@ class Turn:
     async def _loop(self, history: list[dict[str, Any]]) -> str:
         specs = tool_specs(self.package)
         send_reasoning = self.package.manifest.model.send_reasoning
-        base = [{"role": "system", "content": system_prompt(self.package)}, *for_model(history, send_reasoning)]
+        system = {"role": "system", "content": system_prompt(self.package, self.prompt_append)}
+        base = [system, *for_model(history, send_reasoning)]
         limit = self.package.manifest.model.max_steps
         while True:
             over_limit = self.steps >= limit
@@ -218,6 +225,12 @@ class Turn:
             return f"attached {len(self.components)} components to the answer", False
         if name in WEB_TOOLS:
             return await (webfetch if name == "webfetch" else websearch)(arguments)
+        tool = self.declared.get(name)
+        if tool is not None and tool.service:
+            if self.services is None:
+                return f"{name}: its service is not configured", True
+            timeout = tool.timeout_seconds or self.package.manifest.sandbox.tool_timeout_seconds
+            return await self.services.call(tool, arguments, self.owner, timeout)
         if name in BUILTIN_TOOLS or name in {t.name for t in self.package.declared}:
             return await self.runner.run(name, arguments)
         return f"tool {name} does not exist", True

@@ -1,5 +1,5 @@
-# The demo deployment: two agents over the ccts-kg vault, each with its own sandbox, and one app allowed to call both.
-# Run `astralvessel deploy` here to write compose.generated.yml, then start it with docker compose.
+# An example deployment: two agents over a small sample field guide, each with its own sandbox, and one app
+# allowed to call both. Run `astralvessel deploy` here to write compose.generated.yml, then start it.
 
 [vessel]
 public_url = "http://vessel:8700"
@@ -10,26 +10,26 @@ upstream_url = "https://api-llm-factory.ai.uky.edu/v1"
 upstream_key = "env:VESSEL_UPSTREAM_MODEL_KEY"
 
 [[agents]]
-id = "nexus"
-package = "../examples/nexus"
-[agents.sandbox]
-memory = "4g"
-cpus = 4
-pids = 512
-scratch = "256m"
-mounts = [{ target = "/vault", source = "env:VESSEL_VAULT_DIR" }]
-
-[[agents]]
-id = "vault-reader"
-package = "../examples/vault-reader"
+id = "field-guide"
+package = "../examples/field-guide"
 [agents.sandbox]
 memory = "1g"
+cpus = 2
+pids = 256
+scratch = "64m"
+mounts = [{ target = "/data", source = "../examples/sample-data" }]
+
+[[agents]]
+id = "field-guide-reader"
+package = "../examples/field-guide-reader"
+[agents.sandbox]
+memory = "512m"
 cpus = 1
 pids = 128
-scratch = "64m"
-mounts = [{ target = "/vault", source = "env:VESSEL_VAULT_DIR" }]
+scratch = "32m"
+mounts = [{ target = "/data", source = "../examples/sample-data" }]
 
 [[apps]]
-name = "demo"
+name = "example"
 key_sha256 = "env:VESSEL_APP_KEY_SHA256"
-agents = ["nexus", "vault-reader"]
+agents = ["field-guide", "field-guide-reader"]

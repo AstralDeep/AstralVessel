@@ -60,7 +60,7 @@ BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
         }, "required": ["pattern"]},
     },
     "glob": {
-        "description": "Find files whose path matches a glob pattern such as wiki/person-*.md.",
+        "description": "Find files whose path matches a glob pattern such as docs/*.md.",
         "parameters": {"type": "object", "properties": {
             "pattern": {"type": "string"},
             "path": {"type": "string", "description": "Directory to search from (default: working directory)"},

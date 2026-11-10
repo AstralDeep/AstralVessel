@@ -56,7 +56,7 @@
   <g data-box="app">
     <rect x="24" y="128" width="150" height="284" rx="12" class="box"/>
     <text x="38" y="158" class="title">App</text>
-    <text x="38" y="180" class="sub">e.g. the demo</text>
+    <text x="38" y="180" class="sub">e.g. a web app</text>
     <text x="38" y="208" class="holds">Holds</text>
     <text x="38" y="227">app key, history</text>
     <text x="38" y="253" class="does">Does</text>

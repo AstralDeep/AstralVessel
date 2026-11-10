@@ -7,7 +7,7 @@ import tomllib
 from pathlib import Path
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 BUILTIN_TOOLS = ("read", "grep", "glob", "list", "bash", "webfetch", "websearch")
 # Astral's six permission scopes, weakest first; each tool has one and an agent's card carries the strongest.
@@ -35,6 +35,7 @@ class ModelSection(Strict):
     max_steps: int = Field(default=40, ge=1, le=200)
     max_output_tokens: int = Field(default=8192, ge=256)
     send_reasoning: bool = False
+    images: bool = False  # the model accepts images in user messages
 
 
 class Mount(Strict):
@@ -49,6 +50,8 @@ class SandboxSection(Strict):
     deadline_seconds: int = Field(default=600, ge=5, le=3600)
     tool_timeout_seconds: int = Field(default=60, ge=1, le=600)
     tool_output_chars: int = Field(default=20000, ge=1000, le=200000)
+    # A Dockerfile in the package, built FROM the AstralVessel image, for tools that need extra software.
+    dockerfile: str | None = None
 
 
 class ToolsSection(Strict):
@@ -77,13 +80,24 @@ class Manifest(Strict):
 
 
 class DeclaredTool(Strict):
+    # Either a command run in the sandbox, or an application-provided service the vessel calls over HTTP.
     name: str = Field(pattern=r"^[a-z][a-z0-9_]{0,62}$")
     description: str
-    command: list[str]
+    command: list[str] | None = None
+    service: str | None = Field(default=None, pattern=r"^[a-z][a-z0-9-]{0,62}$")
+    path: str | None = Field(default=None, pattern=r"^/[A-Za-z0-9._~/-]{0,200}$")
     parameters: dict[str, Any] = {"type": "object", "properties": {}}
     timeout_seconds: int | None = None
     input: Literal["json-stdin", "args"] = "json-stdin"
     scope: Literal[SCOPES] = "tools:read"
+
+    @model_validator(mode="after")
+    def one_kind(self) -> DeclaredTool:
+        if (self.command is None) == (self.service is None):
+            raise ValueError(f"tool {self.name} needs exactly one of command or service")
+        if self.service is not None and (self.path is None or ".." in self.path.split("/")):
+            raise ValueError(f"service tool {self.name} needs a path without ..")
+        return self
 
 
 class AgentPackage(BaseModel):
@@ -91,6 +105,20 @@ class AgentPackage(BaseModel):
     manifest: Manifest
     prompt: str
     declared: list[DeclaredTool]
+
+    def briefing(self, extra: tuple[str, ...] = ()) -> str:
+        # Read on every turn, so an edit to prompt.md (or an appended section) applies without a restart.
+        parts = []
+        for name in ("prompt.md", *extra):
+            try:
+                parts.append((self.root / name).read_text().strip())
+            except OSError:
+                if name == "prompt.md":
+                    parts.append(self.prompt.strip())  # the copy read at startup
+        return "\n\n".join(p for p in parts if p)
+
+    def services(self) -> set[str]:
+        return {t.service for t in self.declared if t.service}
 
     def tool_scopes(self) -> dict[str, str]:
         scopes = {name: BUILTIN_SCOPES[name] for name in self.manifest.tools.builtin}
@@ -113,6 +141,9 @@ def load_package(path: str | Path) -> AgentPackage:
         if root not in tool_path.parents:
             raise ValueError(f"declared tool {rel} is outside the package")
         declared.append(DeclaredTool.model_validate(tomllib.loads(tool_path.read_text())))
+    dockerfile = manifest.sandbox.dockerfile
+    if dockerfile and root not in (root / dockerfile).resolve().parents:
+        raise ValueError("the sandbox dockerfile must be inside the package")
     names = [t.name for t in declared]
     clash = (set(names) & set(BUILTIN_TOOLS)) | {n for n in names if names.count(n) > 1}
     if clash:

@@ -3,21 +3,21 @@
 # Run from deploy/ after `astralvessel deploy` and `docker compose ... up -d` (see the README).
 set -u
 pass=0; fail=0
-dc() { docker compose -f compose.generated.yml -f compose.demo.yml --env-file .env "$@"; }
+dc() { docker compose -f compose.generated.yml --env-file .env "$@"; }
 check() { local name="$1"; shift; if "$@" >/dev/null 2>&1; then echo "PASS  $name"; pass=$((pass+1)); else echo "FAIL  $name"; fail=$((fail+1)); fi; }
 py() { local svc="$1"; shift; dc exec -T "$svc" python -c "$@"; }
 
 CONNECT='import socket,sys; s=socket.socket(); s.settimeout(3); sys.exit(0 if s.connect_ex((sys.argv[1], int(sys.argv[2])))==0 else 1)'
 reach() { dc exec -T "$1" python -c "$CONNECT" "$2" "$3"; }
 not_reach() { ! reach "$@"; }
-SB=sandbox-nexus
+SB=sandbox-field-guide
 
 check "sandbox has no route to the internet"            not_reach $SB 1.1.1.1 443
 check "sandbox cannot resolve or reach egress"          not_reach $SB egress 8080
 check "sandbox cannot reach the model host directly"    not_reach $SB api-llm-factory.ai.uky.edu 443
 check "sandbox cannot reach the harness API"            not_reach $SB vessel 8700
 check "sandbox cannot reach the harness's front address" not_reach $SB 172.31.247.10 8700
-check "one agent's sandbox cannot reach another's"      not_reach $SB sandbox-vault-reader 8710
+check "one agent's sandbox cannot reach another's"      not_reach $SB sandbox-field-guide-reader 8710
 check "sandbox holds no task or conversation store"     py $SB 'import glob,sys; sys.exit(1 if glob.glob("/data/*") or [p for d in ("/opt","/home","/tmp","/agent") for p in glob.glob(d + "/**/*.sqlite", recursive=True)] else 0)'
 check "sandbox environment holds no model or app key"   py $SB 'import os,sys; sys.exit(1 if any(k in os.environ for k in ("VESSEL_APP_KEY","VESSEL_APP_KEY_SHA256","VESSEL_MODEL_KEY","LLM_API_KEY")) else 0)'
 check "sandbox holds its own token, not the master"     py $SB "import os,sys; sys.exit(1 if os.environ['VESSEL_SANDBOX_TOKEN'] == '$(. ./.env; echo "$VESSEL_SANDBOX_TOKEN")' else 0)"
@@ -26,17 +26,17 @@ try:
     open("/opt/x","w"); sys.exit(1)
 except OSError: sys.exit(0)'
 check "sandbox scratch space is noexec"                 dc exec -T $SB sh -c '! (printf "#!/bin/sh\necho ran" > /tmp/x.sh && chmod +x /tmp/x.sh && /tmp/x.sh)'
-check "vault is mounted read-only"                      py $SB 'import sys
+check "data is mounted read-only"                      py $SB 'import sys
 try:
-    open("/vault/index.md","a"); sys.exit(1)
+    open("/data/species/great-blue-heron.md","a"); sys.exit(1)
 except OSError: sys.exit(0)'
 
 CALL='import asyncio,os,sys
 from astralvessel.deployment import sandbox_token
 from astralvessel.sandbox import RemoteRunner
 async def go():
-    r = RemoteRunner(os.environ["VESSEL_SANDBOX_URL_TEMPLATE"].format(id="nexus"),
-                     sandbox_token(os.environ["VESSEL_SANDBOX_TOKEN"], "nexus"), 30)
+    r = RemoteRunner(os.environ["VESSEL_SANDBOX_URL_TEMPLATE"].format(id="field-guide"),
+                     sandbox_token(os.environ["VESSEL_SANDBOX_TOKEN"], "field-guide"), 30)
     sys.exit(0 if await PROBE(r) else 1)
 '
 probe() { py vessel "${CALL/PROBE/probe}

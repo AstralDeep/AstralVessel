@@ -15,10 +15,10 @@ from astralvessel.sandbox import LocalRunner
 from astralvessel.tools import clip
 
 
-def test_example_nexus_package_loads():
-    package = load_package("examples/nexus")
-    assert package.manifest.agent.name == "nexus"
-    assert {t.name for t in package.declared} == {"find_pages", "profile"}
+def test_example_field_guide_package_loads():
+    package = load_package("examples/field-guide")
+    assert package.manifest.agent.name == "field-guide"
+    assert {t.name for t in package.declared} == {"species"}
     assert package.manifest.output.primitives
 
 
@@ -45,20 +45,20 @@ def test_declared_tool_cannot_shadow_a_builtin(package_dir):
 
 async def test_sandbox_tools_run_with_limits(package_dir):
     runner = LocalRunner(load_package(package_dir))
-    out, err = await runner.run("read", {"path": "wiki/person-ada-lovelace.md"})
+    out, err = await runner.run("read", {"path": "notes/ada-lovelace.md"})
     assert not err and "Analytical engine" in out
     out, err = await runner.run("grep", {"pattern": "Analytical", "glob": "*.md"})
-    assert not err and "person-ada-lovelace.md" in out
+    assert not err and "ada-lovelace.md" in out
     out, err = await runner.run("grep", {"pattern": "nothing-matches-this"})
     assert out == "no matches" and not err
-    out, err = await runner.run("glob", {"pattern": "wiki/person-*.md"})
-    assert "person-ada-lovelace.md" in out
+    out, err = await runner.run("glob", {"pattern": "notes/*.md"})
+    assert "ada-lovelace.md" in out
     out, err = await runner.run("glob", {"pattern": "*.md"})
-    assert "person-ada-lovelace.md" in out
+    assert "ada-lovelace.md" in out
     out, err = await runner.run("glob", {"pattern": "/**/*.sqlite"})
     assert err and "relative" in out
-    out, err = await runner.run("list", {"path": "wiki"})
-    assert out.strip() == "person-ada-lovelace.md"
+    out, err = await runner.run("list", {"path": "notes"})
+    assert out.strip() == "ada-lovelace.md"
     out, err = await runner.run("bash", {"command": "echo hi && exit 3"})
     assert err and "hi" in out and "exit code 3" in out
     out, err = await runner.run("bash", {"command": "sleep 30"})
