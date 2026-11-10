@@ -156,7 +156,7 @@ async def test_history_images_need_an_image_agent_and_deep_nesting_is_refused(pa
             {"text": "hi"}, {"raw": base64.b64encode(nested.encode()).decode(),
                              "mediaType": "application/vnd.astralvessel.transcript+json"}]}}}
     headers = {"Authorization": f"Bearer {APP_KEY}", "X-Vessel-User": "u", "A2A-Version": "1.0"}
-    reply = (await client._client.post("/agents/tester/a2a", headers=headers, json=body)).json()
+    reply = (await client._client.post("/agents/tester", headers=headers, json=body)).json()
     assert reply["result"]["task"]["status"]["state"] == "TASK_STATE_REJECTED"
     assert "recursion" not in json.dumps(reply)
 

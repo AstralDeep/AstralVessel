@@ -29,7 +29,7 @@ class VesselClient:
         return {"X-Vessel-User": user}
 
     async def rpc(self, agent: str, user: str, method: str, params: dict[str, Any]) -> dict[str, Any]:
-        response = await self._client.post(f"/agents/{agent}/a2a", headers={**self._user(user), "A2A-Version": "1.0"},
+        response = await self._client.post(f"/agents/{agent}", headers={**self._user(user), "A2A-Version": "1.0"},
                                            json={"jsonrpc": "2.0", "id": uuid.uuid4().hex, "method": method,
                                                  "params": params})
         return response.json()
@@ -50,10 +50,12 @@ class VesselClient:
         message: dict[str, Any] = {"messageId": uuid.uuid4().hex, "role": "ROLE_USER", "parts": parts}
         if conversation_id:
             message["contextId"] = conversation_id
+        # Asking for the transcript media type is what makes the vessel stream the turn's messages back.
+        accepted = ["text/markdown", TRANSCRIPT_MEDIA_TYPE, PRIMITIVES_MEDIA_TYPE]
         body = {"jsonrpc": "2.0", "id": uuid.uuid4().hex, "method": "SendStreamingMessage",
-                "params": {"message": message}}
+                "params": {"message": message, "configuration": {"acceptedOutputModes": accepted}}}
         headers = {**self._user(user), "Accept": "text/event-stream", "A2A-Version": "1.0"}
-        async with self._client.stream("POST", f"/agents/{agent}/a2a", headers=headers, json=body) as response:
+        async with self._client.stream("POST", f"/agents/{agent}", headers=headers, json=body) as response:
             if response.status_code != 200:
                 await response.aread()
                 yield {"type": "error", "status": response.status_code, "detail": response.text[:500]}
@@ -142,7 +144,8 @@ def decode(frame: dict[str, Any]) -> list[dict[str, Any]]:
             if "text" in part:
                 text += part["text"]
             elif part.get("mediaType") == PRIMITIVES_MEDIA_TYPE:
-                components = (_data(part) or {}).get("components", [])
+                body = _data(part) or {}
+                components = body.get("_ui_components") or body.get("components") or []
                 version = (part.get("metadata") or {}).get("schema_version")
         out.append({"type": "answer", "text": text, "components": components, "schema_version": version,
                     "raw": frame})
