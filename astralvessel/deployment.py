@@ -130,8 +130,9 @@ class DeploymentFile(Strict):
             if unknown:
                 raise ValueError(f"app {app.name} names unknown agents: {', '.join(unknown)}")
         issuer_ids = [i.id for i in self.issuers]
-        if len(set(issuer_ids)) != len(issuer_ids):
-            raise ValueError("issuer ids must be unique")
+        issuer_names = [i.issuer for i in self.issuers]
+        if len(set(issuer_ids)) != len(issuer_ids) or len(set(issuer_names)) != len(issuer_names):
+            raise ValueError("issuer ids and issuer URLs must each be unique")
         for issuer in self.issuers:
             unknown = sorted(set(issuer.agents) - set(ids))
             if unknown:

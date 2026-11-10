@@ -145,3 +145,49 @@ def test_issuer_settings_are_checked(package_dir, tmp_path):
         (tmp_path / "d.toml").write_text(base + "[[issuers]]\n" + issuer + "\n")
         with pytest.raises(ValueError):
             load_deployment(tmp_path / "d.toml")
+
+
+async def test_unrecognized_scopes_narrow_to_nothing_rather_than_everything(vessel, keys, model):
+    model.replies = [text_reply("a"), text_reply("b"), text_reply("c")]
+    await turn(client(vessel, token(keys["a"], "a1", scope="tools:READ")))
+    c = client(vessel, APP_KEY)
+    c._client.headers["X-Vessel-Scopes"] = "tools:bogus"
+    await turn(c, "alice")
+    await turn(client(vessel, token(keys["a"], "a1", scope=["tools:search"])))
+    offered = [{t["function"]["name"] for t in r.get("tools") or []} for r in model.requests]
+    assert offered == [set(), set(), {"grep"}]
+
+
+async def test_odd_issuer_claims_are_refused_not_crashed(vessel, keys):
+    import base64
+
+    def part(value):
+        return base64.urlsafe_b64encode(json.dumps(value).encode()).decode().rstrip("=")
+    unsigned = part({"alg": "none"}) + "." + part({"iss": ["a", "b"], "aud": "x", "sub": "u"}) + "."
+    events = await turn(client(vessel, unsigned))
+    assert events[0]["status"] == 401
+
+
+def test_duplicate_issuers_are_refused(package_dir, tmp_path):
+    entry = f'[[issuers]]\nissuer = "{ISS_A}"\naudience = "a"\njwks_file = "k.json"\nagents = []\n'
+    (tmp_path / "d.toml").write_text(f'[[agents]]\nid = "tester"\npackage = "{package_dir}"\n'
+                                     + entry.replace("[[issuers]]\n", '[[issuers]]\nid = "one"\n')
+                                     + entry.replace("[[issuers]]\n", '[[issuers]]\nid = "two"\n'))
+    with pytest.raises(ValueError, match="unique"):
+        load_deployment(tmp_path / "d.toml")
+
+
+async def test_only_signing_keys_are_used_and_an_empty_refresh_keeps_them(tmp_path, keys):
+    from astralvessel.deployment import IssuerEntry
+    from astralvessel.identity import Verifier
+    path = tmp_path / "k.json"
+    path.write_text(json.dumps({"keys": [{**jwk(keys["a"], "a1"), "use": "enc"}, jwk(keys["rogue"], "r1")]}))
+    issuer = IssuerEntry(id="astral", issuer=ISS_A, audience="vessel-research", jwks_file=str(path), agents=[])
+    verifier = Verifier([issuer])
+    assert await verifier.verify(token(keys["a"], "a1")) is None
+    assert (await verifier.verify(token(keys["rogue"], "r1"))).subject == "user-1"
+    path.write_text(json.dumps({"keys": []}))
+    keyset = verifier.issuers[ISS_A][1]
+    keyset.fetched = 0
+    await keyset._load()
+    assert (await verifier.verify(token(keys["rogue"], "r1"))) is not None

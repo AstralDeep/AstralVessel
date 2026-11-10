@@ -41,17 +41,24 @@ class KeySet:
         self.fetched = 0.0
         self.lock = asyncio.Lock()
 
-    async def key(self, kid: str | None) -> jwt.PyJWK | None:
-        if kid not in self.keys and time.monotonic() - self.fetched > REFRESH_SECONDS:
-            async with self.lock:
-                if kid not in self.keys and time.monotonic() - self.fetched > REFRESH_SECONDS:
-                    await self._load()
+    def _pick(self, kid: str | None) -> jwt.PyJWK | None:
         if kid is None and len(self.keys) == 1:
             return next(iter(self.keys.values()))
         return self.keys.get(kid)
 
+    async def key(self, kid: str | None) -> jwt.PyJWK | None:
+        found = self._pick(kid)
+        if found is not None:
+            return found
+        # Requests that arrive during a fetch wait for it rather than being refused.
+        async with self.lock:
+            found = self._pick(kid)
+            if found is None and (not self.fetched or time.monotonic() - self.fetched > REFRESH_SECONDS):
+                await self._load()
+                found = self._pick(kid)
+        return found
+
     async def _load(self) -> None:
-        self.fetched = time.monotonic()
         try:
             if self.issuer.jwks_file:
                 with open(self.issuer.jwks_file) as handle:
@@ -64,14 +71,23 @@ class KeySet:
                     document = response.json()
             keys = {}
             for entry in document.get("keys", []):
+                # Only signing keys: an encryption key published in the same set never verifies a token.
+                if not isinstance(entry, dict) or entry.get("use", "sig") != "sig" or (
+                        "key_ops" in entry and "verify" not in (entry.get("key_ops") or [])):
+                    continue
                 try:
                     key = jwt.PyJWK(entry)
                 except jwt.PyJWTError:
                     continue
                 keys[entry.get("kid")] = key
-            self.keys = keys
+            if keys:
+                self.keys = keys
+            else:
+                log.warning("issuer %s published no usable signing keys; keeping the previous set", self.issuer.id)
         except Exception:  # noqa: BLE001  keep the keys we had; tokens signed with unknown keys are refused
             log.warning("could not load signing keys for issuer %s", self.issuer.id, exc_info=True)
+        finally:
+            self.fetched = time.monotonic()
 
 
 class Verifier:
@@ -85,7 +101,8 @@ class Verifier:
             claims = jwt.decode(token, options={"verify_signature": False})
         except jwt.PyJWTError:
             return None
-        found = self.issuers.get(claims.get("iss"))
+        issuer_claim = claims.get("iss")
+        found = self.issuers.get(issuer_claim) if isinstance(issuer_claim, str) else None
         if found is None:
             return None
         issuer, keyset = found
@@ -105,7 +122,10 @@ class Verifier:
             return None
         if issuer.authorized_parties and claims.get("azp") not in issuer.authorized_parties:
             return None
-        scopes = frozenset(str(claims.get("scope") or "").split())
+        raw = claims.get("scope") or claims.get("scp") or ""
+        # OAuth puts scopes in one space-separated string; some providers send a list.
+        scopes = frozenset(raw.split() if isinstance(raw, str) else (s for s in raw if isinstance(s, str))
+                           if isinstance(raw, list) else ())
         return Caller(issuer, subject, scopes)
 
 

@@ -472,9 +472,12 @@ class Principal:
 
 
 def _narrowing(values: Any) -> frozenset[str] | None:
-    # Only Astral's tool scopes narrow; anything else in a scope list is ignored. None means no narrowing.
-    wanted = frozenset(v for v in values if v in SCOPES)
-    return wanted or None
+    # Any tools:* entry asks for narrowing, and narrowing keeps only the scopes this vessel knows: a typo, the
+    # wrong case or a newer scope name leaves fewer tools (possibly none), never all of them. None: no request.
+    asked = [v for v in values if isinstance(v, str) and v.lower().startswith("tools:")]
+    if not asked:
+        return None
+    return frozenset(v for v in asked if v in SCOPES)
 
 
 async def authenticate(settings: Settings, verifier: Verifier, request: Request) -> Principal | None:
@@ -492,8 +495,13 @@ async def authenticate(settings: Settings, verifier: Verifier, request: Request)
     user = request.headers.get(USER_HEADER, "")
     if app is None or not USER_ID.fullmatch(user):
         return None
-    scopes = request.headers.get("x-vessel-scopes")
-    return Principal(f"{app.name}/{user}", tuple(app.agents), _narrowing(scopes.split()) if scopes else None)
+    header = request.headers.get("x-vessel-scopes")
+    scopes = None
+    if header is not None:
+        scopes = _narrowing(header.split()) if header.strip() else frozenset()
+        if scopes is None:
+            scopes = frozenset()  # a scope header with no tool scopes in it allows no tools
+    return Principal(f"{app.name}/{user}", tuple(app.agents), scopes)
 
 
 def create_app(settings: Settings | None = None, runners: dict[str, ToolRunner] | None = None,
