@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import base64
+import re
 from typing import Any
 
 MEDIA_TYPE = "application/vnd.astralvessel.transcript+json"
@@ -64,11 +66,37 @@ def _parse(payload: Any) -> list[dict[str, Any]]:
         checked.append(dict(message))
     if pending:
         raise TranscriptError("the history ends with unanswered tool calls")
+    images = sum(1 for m in checked if isinstance(m.get("content"), list)
+                 for p in m["content"] if p.get("type") == "image_url")
+    if images > MAX_HISTORY_IMAGES:
+        raise TranscriptError(f"the history may carry at most {MAX_HISTORY_IMAGES} images")
     return checked
 
 
-IMAGE_URL = ("data:image/png;base64,", "data:image/jpeg;base64,", "data:image/gif;base64,", "data:image/webp;base64,")
-MAX_IMAGE_URL_CHARS = 7_000_000
+IMAGE_MAGIC = {"image/png": (b"\x89PNG\r\n\x1a\n",), "image/jpeg": (b"\xff\xd8\xff",),
+               "image/gif": (b"GIF87a", b"GIF89a"), "image/webp": (b"RIFF",)}
+MAX_IMAGE_BYTES = 5_000_000
+MAX_HISTORY_IMAGES = 32
+DATA_URL = re.compile(r"^data:(image/(?:png|jpeg|gif|webp));base64,([A-Za-z0-9+/]+={0,2})$")
+
+
+def has_images(messages: list[dict[str, Any]]) -> bool:
+    return any(isinstance(m.get("content"), list) and any(p.get("type") == "image_url" for p in m["content"])
+               for m in messages)
+
+
+def _check_image(url: Any) -> bool:
+    # The same checks an attached image gets: a known type, real base64, the right leading bytes, and a size cap.
+    match = DATA_URL.match(url) if isinstance(url, str) and len(url) < MAX_IMAGE_BYTES * 2 else None
+    if not match:
+        return False
+    try:
+        raw = base64.b64decode(match.group(2), validate=True)
+    except ValueError:
+        return False
+    kind = match.group(1)
+    return len(raw) <= MAX_IMAGE_BYTES and raw.startswith(IMAGE_MAGIC[kind]) and (
+        kind != "image/webp" or raw[8:12] == b"WEBP")
 
 
 def _check_user_content(content: Any, where: str) -> None:
@@ -82,9 +110,10 @@ def _check_user_content(content: Any, where: str) -> None:
         if kind == "text" and set(part) == {"type", "text"} and isinstance(part["text"], str):
             continue
         image = part.get("image_url") if kind == "image_url" and set(part) == {"type", "image_url"} else None
-        url = image.get("url") if isinstance(image, dict) and set(image) <= {"url", "detail"} else None
-        if not isinstance(url, str) or not url.startswith(IMAGE_URL) or len(url) > MAX_IMAGE_URL_CHARS:
-            raise TranscriptError(f"{where} has a content part that is not text or an inline image")
+        ok = isinstance(image, dict) and set(image) <= {"url", "detail"} and \
+            image.get("detail", "auto") in ("auto", "low", "high") and _check_image(image.get("url"))
+        if not ok:
+            raise TranscriptError(f"{where} has a content part that is not text or a valid inline image")
 
 
 def _check_assistant(message: dict[str, Any], where: str, pending: set[str]) -> None:

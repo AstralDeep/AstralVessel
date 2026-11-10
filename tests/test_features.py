@@ -119,14 +119,64 @@ async def test_bad_or_unwanted_images_are_refused(served, package_dir, model, tm
     assert model.requests == []
 
 
-def test_history_may_carry_inline_images_but_not_links():
-    ok = parse_history({"version": 1, "messages": [{"role": "user", "content": [
-        {"type": "text", "text": "q"}, {"type": "image_url", "image_url": {"url": "data:image/png;base64,AAAA"}}]},
-        {"role": "assistant", "content": "a"}]})
-    assert len(ok) == 2
-    with pytest.raises(TranscriptError):
-        parse_history({"version": 1, "messages": [{"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": "https://example.com/x.png"}}]}]})
+PNG_URL = "data:image/png;base64," + base64.b64encode(PNG).decode()
+
+
+def history_with(image: dict) -> dict:
+    return {"version": 1, "messages": [{"role": "user", "content": [{"type": "text", "text": "q"}, image]},
+                                       {"role": "assistant", "content": "a"}]}
+
+
+def test_history_images_get_the_same_checks_as_attachments():
+    assert len(parse_history(history_with({"type": "image_url", "image_url": {"url": PNG_URL}}))) == 2
+    bad = [{"url": "https://example.com/x.png"}, {"url": "data:image/png;base64,NOT_BASE64!!"},
+           {"url": "data:image/png;base64," + base64.b64encode(b"GIF89a....").decode()},
+           {"url": PNG_URL, "detail": {"evil": [1, 2]}}]
+    for image in bad:
+        with pytest.raises(TranscriptError):
+            parse_history(history_with({"type": "image_url", "image_url": image}))
+    many = {"version": 1, "messages": [
+        {"role": "user", "content": [{"type": "image_url", "image_url": {"url": PNG_URL}}] * 33},
+        {"role": "assistant", "content": "a"}]}
+    with pytest.raises(TranscriptError, match="at most"):
+        parse_history(many)
+
+
+async def test_history_images_need_an_image_agent_and_deep_nesting_is_refused(package_dir, model, tmp_path):
+    dep = load_deployment(deployment(tmp_path / "d.toml", package_dir, services=""))
+    settings = Settings(dep, task_db=str(tmp_path / "t.sqlite"), app_keys=app_keys(dep), allow_in_process=True)
+    client = VesselClient("http://vessel.test", APP_KEY, transport=httpx.ASGITransport(
+        app=create_app(settings, model_transport=model.transport())))
+    history = history_with({"type": "image_url", "image_url": {"url": PNG_URL}})["messages"]
+    events = [e async for e in client.stream("tester", "u", "hi", history=history)]
+    assert events[-1]["state"] == "TASK_STATE_REJECTED" and model.requests == []
+    nested = "[" * 100_000 + "]" * 100_000
+    body = {"jsonrpc": "2.0", "id": 1, "method": "SendMessage", "params": {"message": {
+        "messageId": "m1", "role": "ROLE_USER", "parts": [
+            {"text": "hi"}, {"raw": base64.b64encode(nested.encode()).decode(),
+                             "mediaType": "application/vnd.astralvessel.transcript+json"}]}}}
+    headers = {"Authorization": f"Bearer {APP_KEY}", "X-Vessel-User": "u", "A2A-Version": "1.0"}
+    reply = (await client._client.post("/agents/tester/a2a", headers=headers, json=body)).json()
+    assert reply["result"]["task"]["status"]["state"] == "TASK_STATE_REJECTED"
+    assert "recursion" not in json.dumps(reply)
+
+
+def test_service_grants_refuse_vessel_headers_and_url_queries(service_package, tmp_path):
+    for services in ('[agents.services.records]\nurl = "http://r.test"\nheaders = { "x-vessel-owner" = "spoof" }\n',
+                     '[agents.services.records]\nurl = "http://r.test/api?k=1"\n'):
+        with pytest.raises(ValueError):
+            load_deployment(deployment(tmp_path / "d.toml", service_package, services=services))
+
+
+async def test_echoed_credentials_are_redacted_and_transcripts_are_not_stored(served, model, tmp_path):
+    client, _, replies = served
+    replies.append(httpx.Response(401, text="bad token s3cret-token for you"))
+    model.replies = [tool_reply("lookup", {"q": "x"}), text_reply("done")]
+    events = await run(client, "go")
+    assert "s3cret-token" not in json.dumps(events) and "[redacted]" in json.dumps(events)
+    import sqlite3
+    rows = sqlite3.connect(tmp_path / "t.sqlite").execute("select artifacts from tasks_tester").fetchall()
+    assert rows and all("transcript" not in (r[0] or "") for r in rows)
 
 
 def test_an_agent_can_ship_its_own_sandbox_image(package_dir, tmp_path):
@@ -138,8 +188,11 @@ def test_an_agent_can_ship_its_own_sandbox_image(package_dir, tmp_path):
     build = generate(dep, repo_root=tmp_path)["services"]["sandbox-tester"]["build"]
     assert build["dockerfile"] == "sandbox.Dockerfile"
     assert build["additional_contexts"] == {"astralvessel": "service:vessel"}
-    (package_dir / "sandbox.Dockerfile").write_text("FROM astralvessel\nRUN echo changed\n")
-    assert load_deployment(tmp_path / "d.toml").agents["tester"].fingerprint != before
+    (package_dir / "sandbox.Dockerfile").write_text("FROM astralvessel\nCOPY tools/ /opt/tools/\n")
+    copied = load_deployment(tmp_path / "d.toml").agents["tester"].fingerprint
+    assert copied != before
+    (package_dir / "tools" / "echo.toml").write_text((package_dir / "tools" / "echo.toml").read_text() + "\n")
+    assert load_deployment(tmp_path / "d.toml").agents["tester"].fingerprint != copied
     (package_dir / "vessel.toml").write_text(manifest.read_text().replace('"sandbox.Dockerfile"', '"../x.Dockerfile"'))
     with pytest.raises(ValueError, match="inside the package"):
         load_deployment(tmp_path / "d.toml")

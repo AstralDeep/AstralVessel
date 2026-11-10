@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 
-from .deployment import ServiceGrant, resolve
+from .deployment import ServiceGrant, check_service_url, resolve
 from .manifest import DeclaredTool
 
 log = logging.getLogger("astralvessel")
@@ -20,7 +20,8 @@ class ServiceClient:
     def __init__(self, agent_id: str, grants: dict[str, ServiceGrant],
                  transport: httpx.AsyncBaseTransport | None = None):
         self.agent_id = agent_id
-        self.endpoints = {name: (resolve(g.url).rstrip("/"), {k: resolve(v) for k, v in g.headers.items()})
+        self.endpoints = {name: (check_service_url(resolve(g.url)).rstrip("/"),
+                                 {k: resolve(v) for k, v in g.headers.items()})
                           for name, g in grants.items()}
         self._client = httpx.AsyncClient(transport=transport, follow_redirects=False, trust_env=False)
 
@@ -41,6 +42,9 @@ class ServiceClient:
             log.warning("service %s unreachable for tool %s", tool.service, tool.name, exc_info=True)
             return f"{tool.name}: the service is unreachable", True
         text = body.decode("utf-8", "replace")
+        for secret in headers.values():
+            if len(secret) >= 8:
+                text = text.replace(secret, "[redacted]")  # a service that echoes its credentials must not leak them
         if response.status_code >= 500 or 300 <= response.status_code < 400:
             return f"{tool.name} failed (HTTP {response.status_code})", True
         if "json" in response.headers.get("content-type", ""):

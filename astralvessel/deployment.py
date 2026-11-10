@@ -52,6 +52,21 @@ class ServiceGrant(Strict):
     url: str
     headers: dict[str, str] = {}
 
+    @model_validator(mode="after")
+    def plain(self) -> ServiceGrant:
+        if any(name.lower().startswith("x-vessel-") for name in self.headers):
+            raise ValueError("X-Vessel-* headers are set by the vessel and may not be granted")
+        if not self.url.startswith("env:"):
+            check_service_url(self.url)
+        return self
+
+
+def check_service_url(url: str) -> str:
+    # The tool's path is appended, so a query or fragment here would swallow it.
+    if not url.startswith(("http://", "https://")) or "?" in url or "#" in url:
+        raise ValueError(f"service url {url!r} must be http(s) with no query or fragment")
+    return url
+
 
 class AgentEntry(Strict):
     id: str = Field(pattern=AGENT_ID)
@@ -103,7 +118,7 @@ class Agent(BaseModel):
         # Everything that shapes the sandbox container; a change means the operator must redeploy it.
         sandbox = self.package.manifest.sandbox.model_dump()
         dockerfile = self.package.manifest.sandbox.dockerfile
-        image = hashlib.sha256((self.package.root / dockerfile).read_bytes()).hexdigest() if dockerfile else None
+        image = build_inputs_hash(self.package.root, dockerfile) if dockerfile else None
         body = {"id": self.id, "profile": self.profile.model_dump(), "needs": sandbox, "image": image, "schema": 1}
         return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:16]
 
@@ -154,6 +169,23 @@ def _check_grants(entry: AgentEntry, package: AgentPackage) -> None:
         if not need.read_only or not grants[target].read_only:
             raise ValueError(f"agent {entry.id}: writable mounts ({target}) are not supported yet; mounts are "
                              "read-only and each call writes only its own scratch directory")
+
+
+def build_inputs_hash(root: Path, dockerfile: str) -> str:
+    # The Dockerfile plus every package file its COPY and ADD lines bring in, so editing one marks the sandbox stale.
+    digest = hashlib.sha256((root / dockerfile).read_bytes())
+    for line in (root / dockerfile).read_text().splitlines():
+        words = line.split()
+        if not words or words[0].upper() not in ("COPY", "ADD"):
+            continue
+        sources = [w for w in words[1:-1] if not w.startswith("--")]
+        for source in sources:
+            for path in sorted(root.glob(source.lstrip("/"))):
+                files = sorted(p for p in path.rglob("*") if p.is_file()) if path.is_dir() else [path]
+                for file in files:
+                    if root in file.resolve().parents:
+                        digest.update(str(file.relative_to(root)).encode() + b"\0" + file.read_bytes())
+    return digest.hexdigest()
 
 
 def resolve(value: str) -> str:

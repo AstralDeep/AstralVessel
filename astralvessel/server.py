@@ -171,8 +171,12 @@ class VesselTaskStore(DatabaseTaskStore):
             keep.append(message)
         del task.history[:]
         task.history.extend(keep)
+        # The transcript artifact is for the live stream (the app stores it). Persisting it meant rewriting every
+        # tool output and attached image on each event, which stalled the vessel for image turns.
+        stored = Task(id=task.id, context_id=task.context_id, status=task.status, history=task.history,
+                      metadata=task.metadata, artifacts=[a for a in task.artifacts if a.name != "transcript"])
         try:
-            await super().save(task, context)
+            await super().save(stored, context)
         except Exception:
             log.warning("task store save failed", exc_info=True)
             raise TaskStoreError() from None
@@ -287,7 +291,7 @@ class VesselExecutor(AgentExecutor):
         except transcript.TranscriptError as exc:
             await updater.reject(self._note(updater, f"invalid request: {exc}"))
             return
-        if images and not self.agent.package.manifest.model.images:
+        if (images or transcript.has_images(history)) and not self.agent.package.manifest.model.images:
             await updater.reject(self._note(updater, "this agent does not accept images"))
             return
         if not text:
@@ -360,7 +364,7 @@ class VesselExecutor(AgentExecutor):
                 if part.HasField("raw"):
                     try:
                         return transcript.parse_history(json.loads(part.raw))
-                    except ValueError:
+                    except (ValueError, RecursionError):
                         raise transcript.TranscriptError("the history is not valid JSON") from None
                 return transcript.parse_history(MessageToDict(part.data))
         return []
