@@ -1,13 +1,14 @@
 # AstralVessel
 
-A lightweight, open agent harness and the standard behind it. AstralVessel is a server for agents that
+A lightweight, open agent server and the spec behind it. AstralVessel is a server for agents that
 sits between an application and its model provider: it takes questions over **A2A 1.0**, uses any
 **OpenAI-compatible** model, runs each agent's tools in its own sealed **sandbox**, reaches the outside
 world only through an **egress** door, and answers in Markdown with optional **AstralPrimitives** so
 Astral's clients can render the result.
 
-It is the harness and sandbox parts of [Astral](https://github.com/AstralDeep), packaged so an
-application can use them without running a full Astral instance.
+It is built on the same design as [Astral](https://github.com/AstralDeep)'s harness and sandbox, as a
+separate implementation an application can use without running a full Astral instance. It is not code
+taken from AstralDeep.
 
 ![Diagram: on the left, a full Astral instance with its web, Windows, Android and Apple clients, accounts and sign-in, an agent catalog of many agents, and a highlighted harness and sandbox. On the right, one app such as a team's web app, using AstralVessel for its agents: an agent folder (vessel.toml, prompt.md, tools/) plus a harness, sandbox and egress. A solid arrow from left to right reads "used on its own"; a dashed arrow back reads "could slot back in later".](assets/lifted-out.svg)
 
@@ -36,11 +37,15 @@ AstralVessel replaces the borrowed assistant and the scaffolding with one compon
 - **Lighter.** It is a Python package and a few containers. It has no coding-assistant features to
   switch off and no private API that shifts between releases.
 - **Open.** Every interface is a published standard: A2A for conversations, the OpenAI-compatible API
-  for models, and AstralPrimitives for rich output. A conformance suite checks any harness against
-  them, and the code is under Apache 2.0 like the rest of Astral.
-- **Astral-ready.** It speaks the same protocols as AstralDeep. Eventually it could slot in as the
-  harness and sandbox AstralDeep uses, and an agent built for AstralVessel could move into Astral
-  without being rewritten.
+  for models, and AstralPrimitives for rich output. A conformance suite checks any agent server that
+  claims to follow this spec, and the code is under Apache 2.0 like the rest of Astral.
+- **Astral-ready.** It speaks the same protocols as AstralDeep, so AstralDeep can call an AstralVessel
+  agent the way it calls any external A2A agent, and an agent built for AstralVessel could move into
+  Astral without being rewritten.
+
+AstralVessel's spec covers an agent server as seen from outside: A2A in, events and transcripts out,
+sandboxes behind it. AstralDeep's own harness contract is a different layer, the interface its
+orchestrator uses for its internal model loop; AstralVessel does not implement or replace it.
 
 ## How it works
 
@@ -51,8 +56,11 @@ agent declares what it needs; the deployment file is the only place access is gr
 
 ![Diagram of who holds what. The app holds its key and its users' conversation history, names each user with X-Vessel-User, and is also on an outside network for its users' browsers. It calls the vessel over A2A 1.0. The vessel serves every agent and runs the agent loop; it holds only runs in flight, never conversation history or the model key. It calls each agent's sandbox over /run (HTTP); there is one sandbox per agent, which runs the tools on read-only data and never has network, secrets, history, or a route to the vessel's API. The vessel reaches the egress over the OpenAI-compatible API, which is also the web proxy for webfetch and websearch. The egress holds the model key, reaches only public addresses on ports 80 and 443, and calls the model over HTTPS: GLM 5.3 on the UK LLM Factory, or any OpenAI-compatible model. Everything except the egress's outbound link and the app's browser-facing side sits on internal Docker networks with no route out.](assets/who-holds-what.svg)
 
-- **The app** holds its own key, which the deployment limits to certain agents. It names each end user
-  with an `X-Vessel-User` header; every task is bound to that app and user. The app owns conversation
+- **The app** authenticates with its own key, which the deployment limits to certain agents, and names
+  each end user with an `X-Vessel-User` header. An orchestrator with an identity provider (such as
+  AstralDeep's Keycloak) can instead send each user's signed token: the vessel checks its issuer,
+  audience, expiry, authorized party and signature against the issuers the deployment trusts. Every
+  task is bound to its owner: the app and user, or the issuer and the token's subject. The app owns conversation
   history: it sends the history with each turn and stores the messages that come back. It may attach
   images for agents whose model accepts them.
 - **The vessel** serves every agent in the deployment, each with its own A2A address and agent card.
@@ -78,6 +86,36 @@ Compose file, the operator starts it, and the vessel serves an agent only once i
 it is confined and was started from the current deployment file (a profile fingerprint set at deploy
 time, so an edited deployment that was not redeployed is caught). Applications join the vessel's
 `front` network to reach it, and to receive its service calls.
+
+## Calling an agent
+
+Each agent has an A2A endpoint at `/agents/<id>` and a public card at
+`/agents/<id>/.well-known/agent-card.json`. Two ways to ask:
+
+- **A conversation turn:** a text message, with the history as an
+  `application/vnd.astralvessel.transcript+json` part. A caller that lists that media type in
+  `acceptedOutputModes` gets the turn's messages streamed back to store; the bundled client does.
+- **A structured skill call,** the shape AstralDeep uses for external agents: a data part
+  `{"method": "tools/call", "name": "<id>", "arguments": {"question": "..."}}`, usually with a
+  non-streaming `SendMessage`. The answer comes back as the task's `answer` artifact, with any
+  AstralPrimitives components under `_ui_components`, which AstralDeep renders.
+
+A token's `tools:*` scopes, or an `X-Vessel-Scopes` header from an app, narrow the tools an agent may
+use on that call. They can only remove tools, never add them.
+
+```toml
+# deployment.toml: trust an identity provider's tokens for some agents
+[[issuers]]
+id = "astral"
+issuer = "https://iam.example.edu/realms/Astral"
+audience = "research-vessel"
+jwks_url = "https://iam.example.edu/realms/Astral/protocol/openid-connect/certs"
+authorized_parties = ["astral-orchestrator"]
+agents = ["records-agent"]
+```
+
+Only asymmetric signatures are accepted (RSA, ECDSA, EdDSA); shared-secret and unsigned tokens are
+refused. Keys are fetched through the egress and refreshed when a token names a new one.
 
 ## Declaring tools
 
@@ -118,7 +156,7 @@ tools' scopes as a `scope:` tag Astral reads.
 | `examples/field-guide/` | An example agent over a small sample field guide, with a declared command tool |
 | `examples/field-guide-reader/` | A second, read-only example agent over the same data, with no shell or web access |
 | `deploy/` | The example `deployment.toml`, `.env.example`, and `verify-isolation.sh` |
-| `conformance/run.py` | Conformance checks: what any harness claiming to follow the standard must pass |
+| `conformance/run.py` | Conformance checks: what any agent server claiming to follow the spec must pass |
 | `stress/load.py` | A load test: many concurrent users, long histories, cancellations and flooding tool output |
 | `tests/` | Unit and service tests with a scripted model |
 
@@ -153,13 +191,16 @@ its own process, unconfined. That mode is for tests only: never point a model at
 
 ## Status
 
-Version 0.3, November 2026. Done:
+Version 0.4, November 2026. Done:
 
 - one vessel serving many agents, each with its own sandbox, card and A2A address
 - `deployment.toml`, per-app keys, and Compose generated by `astralvessel deploy`
 - per-call confinement inside each sandbox (Landlock and seccomp)
 - application-owned history, with transcripts streamed in OpenAI chat format
 - service tools, image input, and per-agent sandbox images
+- verified-token callers (issuer allowlist, audience, owners keyed by issuer and subject), per-call
+  scope narrowing, and structured skill calls in the shape AstralDeep sends
+- fetched web content fenced and labeled as untrusted before the model reads it
 - a task store that survives restarts, owner binding, cancellation, and AstralPrimitives output
 - unit and service tests, isolation probes, conformance checks, a load test, and an independent
   security review
@@ -173,7 +214,7 @@ Not yet:
 
 - jobs: submitting without holding a stream open, completion callbacks, structured results
 - pausing a turn for approval or a policy check before a tool runs
-- files from tools, usage and audit export, signed user identity
+- files from tools, and usage and audit export
 - an admin API and a launcher that starts sandboxes at runtime
 - writable mounts, stronger isolation tiers (gVisor, microVMs), and MCP tool servers
 

@@ -31,7 +31,7 @@ STEP_LIMIT_NOTE = ("You have reached the step limit for this turn. Do not call a
                    "Answer now with what you have found, and say what you could not check.")
 
 
-def tool_specs(package: AgentPackage) -> list[dict[str, Any]]:
+def tool_specs(package: AgentPackage, allowed: set[str] | None = None) -> list[dict[str, Any]]:
     specs = []
     for name in package.manifest.tools.builtin:
         schema = BUILTIN_SCHEMAS[name]
@@ -40,6 +40,8 @@ def tool_specs(package: AgentPackage) -> list[dict[str, Any]]:
         specs.append(tool_spec(tool.name, tool.description, tool.parameters))
     if package.manifest.output.primitives:
         specs.append(tool_spec("present", PRESENT_DESCRIPTION, PRESENT_PARAMETERS))
+    if allowed is not None:
+        specs = [spec for spec in specs if spec["function"]["name"] in allowed]
     return specs
 
 
@@ -61,7 +63,7 @@ def system_prompt(package: AgentPackage, extra: tuple[str, ...] = ()) -> str:
 class Turn:
     def __init__(self, package: AgentPackage, model: ModelClient, runner: ToolRunner, emit: Emit,
                  on_message: OnMessage | None = None, services: Any = None, owner: str = "",
-                 prompt_append: tuple[str, ...] = ()):
+                 prompt_append: tuple[str, ...] = (), tool_scopes: frozenset[str] | None = None):
         self.package = package
         self.prompt_append = prompt_append
         self.services = services
@@ -75,6 +77,10 @@ class Turn:
         self.allowed = set(package.manifest.tools.builtin) | {t.name for t in package.declared}
         if package.manifest.output.primitives:
             self.allowed.add("present")
+        if tool_scopes is not None:
+            # The caller narrowed this turn to some permission scopes: the other tools do not exist for it.
+            scopes = package.tool_scopes()
+            self.allowed = {name for name in self.allowed if scopes.get(name) in tool_scopes}
         self.new_messages: list[dict[str, Any]] = []
         self.components: list[dict[str, Any]] = []
         self.tokens = {"input": 0, "output": 0}
@@ -118,7 +124,7 @@ class Turn:
         return result
 
     async def _loop(self, history: list[dict[str, Any]]) -> str:
-        specs = tool_specs(self.package)
+        specs = tool_specs(self.package, self.allowed)
         send_reasoning = self.package.manifest.model.send_reasoning
         system = {"role": "system", "content": system_prompt(self.package, self.prompt_append)}
         base = [system, *for_model(history, send_reasoning)]

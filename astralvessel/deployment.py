@@ -83,11 +83,39 @@ class AppEntry(Strict):
     agents: list[str]
 
 
+ASYMMETRIC_ALGORITHMS = ("RS256", "RS384", "RS512", "PS256", "ES256", "ES384", "EdDSA")
+
+
+class IssuerEntry(Strict):
+    # A token issuer callers may authenticate with instead of an app key (for example an Astral deployment's
+    # Keycloak). Owners are "<id>|<sub>", so two issuers can never name the same owner.
+    id: str = Field(pattern=r"^[a-z][a-z0-9-]{0,62}$")
+    issuer: str
+    audience: str
+    jwks_url: str | None = None
+    jwks_file: str | None = None
+    authorized_parties: list[str] = []
+    algorithms: list[str] = ["RS256", "ES256", "EdDSA"]
+    agents: list[str]
+
+    @model_validator(mode="after")
+    def keys(self) -> IssuerEntry:
+        if (self.jwks_url is None) == (self.jwks_file is None):
+            raise ValueError(f"issuer {self.id} needs exactly one of jwks_url or jwks_file")
+        if self.jwks_url and not self.jwks_url.startswith("https://"):
+            raise ValueError(f"issuer {self.id}: jwks_url must be https")
+        unknown = sorted(set(self.algorithms) - set(ASYMMETRIC_ALGORITHMS))
+        if unknown or not self.algorithms:
+            raise ValueError(f"issuer {self.id}: only asymmetric algorithms are accepted, not {unknown}")
+        return self
+
+
 class DeploymentFile(Strict):
     vessel: VesselSection = VesselSection()
     egress: EgressSection = EgressSection()
     agents: list[AgentEntry]
-    apps: list[AppEntry]
+    apps: list[AppEntry] = []
+    issuers: list[IssuerEntry] = []
 
     @model_validator(mode="after")
     def consistent(self) -> DeploymentFile:
@@ -101,6 +129,15 @@ class DeploymentFile(Strict):
             unknown = sorted(set(app.agents) - set(ids))
             if unknown:
                 raise ValueError(f"app {app.name} names unknown agents: {', '.join(unknown)}")
+        issuer_ids = [i.id for i in self.issuers]
+        if len(set(issuer_ids)) != len(issuer_ids):
+            raise ValueError("issuer ids must be unique")
+        for issuer in self.issuers:
+            unknown = sorted(set(issuer.agents) - set(ids))
+            if unknown:
+                raise ValueError(f"issuer {issuer.id} names unknown agents: {', '.join(unknown)}")
+        if not self.apps and not self.issuers:
+            raise ValueError("a deployment needs at least one app or issuer")
         return self
 
 
@@ -130,6 +167,7 @@ class Deployment(BaseModel):
     egress: EgressSection
     agents: dict[str, Agent]
     apps: list[AppEntry]
+    issuers: list[IssuerEntry] = []
 
 
 def load_deployment(path: str | Path, packages_root: str | None = None) -> Deployment:
@@ -147,7 +185,10 @@ def load_deployment(path: str | Path, packages_root: str | None = None) -> Deplo
                 raise ValueError(f"agent {entry.id}: prompt_append {name} must be a file inside the package")
         agents[entry.id] = Agent(id=entry.id, package=package, host_package=host, profile=entry.sandbox,
                                  services=entry.services, prompt_append=tuple(entry.prompt_append))
-    return Deployment(path=path, vessel=raw.vessel, egress=raw.egress, agents=agents, apps=raw.apps)
+    issuers = [i.model_copy(update={"jwks_file": str((path.parent / i.jwks_file).resolve())}) if i.jwks_file else i
+               for i in raw.issuers]
+    return Deployment(path=path, vessel=raw.vessel, egress=raw.egress, agents=agents, apps=raw.apps,
+                      issuers=issuers)
 
 
 def _check_grants(entry: AgentEntry, package: AgentPackage) -> None:

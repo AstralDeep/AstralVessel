@@ -55,6 +55,8 @@ from . import events as ev
 from . import transcript
 from .agent import Turn
 from .deployment import Agent, AppEntry, Deployment, load_deployment, resolve, sandbox_token
+from .identity import Verifier, looks_like_jwt
+from .manifest import SCOPES
 from .model import ModelClient, resolve_setting
 from .primitives import schema_version
 from .sandbox import LocalRunner, RemoteRunner, ToolRunner
@@ -75,8 +77,9 @@ TERMINAL = {"TASK_STATE_COMPLETED", "TASK_STATE_FAILED", "TASK_STATE_CANCELED", 
 
 
 class VesselUser(User):
-    def __init__(self, owner: str):
+    def __init__(self, owner: str, tool_scopes: frozenset[str] | None = None):
         self._owner = owner
+        self.tool_scopes = tool_scopes  # None: every tool the agent has; otherwise only tools with these scopes
 
     @property
     def is_authenticated(self) -> bool:
@@ -89,7 +92,7 @@ class VesselUser(User):
 
 class OwnerContextBuilder(DefaultServerCallContextBuilder):
     def build_user(self, request: Request) -> User:
-        return VesselUser(request.scope[SCOPE_KEY])
+        return VesselUser(request.scope[SCOPE_KEY], request.scope.get("vessel_tool_scopes"))
 
 
 def data_part(payload: Any, media_type: str = "application/json", metadata: dict[str, Any] | None = None) -> Part:
@@ -239,6 +242,23 @@ class DeltaCoalescer:
             await self.send(pending)
 
 
+QUESTION_KEYS = ("question", "message", "query", "text", "prompt")
+
+
+def structured_question(message: Message | None) -> str:
+    # Callers that invoke an agent's skill as a structured call (a data part shaped like an MCP tools/call, as
+    # AstralDeep does for external agents) put the question in the arguments.
+    for part in message.parts if message else []:
+        if part.HasField("data") and part.media_type != transcript.MEDIA_TYPE:
+            body = MessageToDict(part.data)
+            arguments = body.get("arguments") if isinstance(body, dict) else None
+            if isinstance(arguments, dict):
+                for key in QUESTION_KEYS:
+                    if isinstance(arguments.get(key), str) and arguments[key].strip():
+                        return arguments[key].strip()
+    return ""
+
+
 def image_urls(message: Message | None) -> list[str]:
     # Attached images become data: URLs for the model; anything else attached as a file is refused.
     urls = []
@@ -284,7 +304,11 @@ class VesselExecutor(AgentExecutor):
             await event_queue.enqueue_event(Task(id=task_id, context_id=conversation_id,
                                                  status=TaskStatus(state=TaskState.TASK_STATE_SUBMITTED),
                                                  history=[context.message] if context.message else []))
-        text = context.get_user_input().strip()
+        text = context.get_user_input().strip() or structured_question(context.message)
+        config = context.configuration
+        # The transcript goes only to callers that ask for it (apps keeping history do); an orchestrator that
+        # just wants the answer, such as AstralDeep calling an external agent, gets the answer alone.
+        wants_transcript = bool(config and transcript.MEDIA_TYPE in config.accepted_output_modes)
         try:
             history = self._history(context.message)
             images = image_urls(context.message)
@@ -322,14 +346,18 @@ class VesselExecutor(AgentExecutor):
 
         async def on_message(message: dict[str, Any]) -> None:
             await stream.flush()
+            if not wants_transcript:
+                return
             await updater.add_artifact([data_part(transcript.envelope([message]), transcript.MEDIA_TYPE)],
                                        artifact_id=artifact_id, name="transcript", append=chunks[0] > 0,
                                        last_chunk=False)
             chunks[0] += 1
 
         model = self._model()
+        user = context.call_context.user
         turn = Turn(self.agent.package, model, self.runner, emit, on_message, services=self.services,
-                    owner=context.call_context.user.user_name, prompt_append=self.agent.prompt_append)
+                    owner=user.user_name, prompt_append=self.agent.prompt_append,
+                    tool_scopes=getattr(user, "tool_scopes", None))
         finished = asyncio.Event()
         content: str | list[dict[str, Any]] = text
         if images:
@@ -349,9 +377,10 @@ class VesselExecutor(AgentExecutor):
         try:
             summary = {k: v for k, v in result.items() if k not in ("text", "components")}
             summary["model"] = self.agent.package.manifest.model.model
-            await updater.add_artifact([data_part(transcript.envelope([], summary), transcript.MEDIA_TYPE)],
-                                       artifact_id=artifact_id, name="transcript", append=chunks[0] > 0,
-                                       last_chunk=True)
+            if wants_transcript:
+                await updater.add_artifact([data_part(transcript.envelope([], summary), transcript.MEDIA_TYPE)],
+                                           artifact_id=artifact_id, name="transcript", append=chunks[0] > 0,
+                                           last_chunk=True)
             await self._finish(updater, result)
         finally:
             finished.set()
@@ -372,7 +401,8 @@ class VesselExecutor(AgentExecutor):
     async def _finish(self, updater: TaskUpdater, result: dict[str, Any]) -> None:
         parts = [Part(text=result["text"] or "", media_type="text/markdown")]
         if result["components"]:
-            parts.append(data_part({"components": result["components"]}, ev.PRIMITIVES_MEDIA_TYPE,
+            # AstralDeep reads UI components from an A2A data part under "_ui_components".
+            parts.append(data_part({"_ui_components": result["components"]}, ev.PRIMITIVES_MEDIA_TYPE,
                                    {"schema_version": schema_version()}))
         await updater.add_artifact(parts, name="answer", last_chunk=True)
         summary = {k: v for k, v in result.items() if k not in ("text", "components")}
@@ -411,13 +441,15 @@ def agent_card(deployment: Deployment, agent: Agent) -> AgentCard:
         version=meta.version,
         capabilities=AgentCapabilities(streaming=True),
         # Astral reads a skill's permission scope from a scope: tag; an agent carries its strongest tool's scope.
-        skills=[AgentSkill(id=agent.id, name=meta.name, description=meta.description,
+        skills=[AgentSkill(id=agent.id, name=meta.name,
+                           description=f"{meta.description} Ask it in a text message, or call this skill with the "
+                                       "question in a `question` argument.",
                            tags=["astralvessel", f"scope:{agent.package.strongest_scope()}"], examples=meta.examples)],
         default_input_modes=["text/plain", transcript.MEDIA_TYPE] + (
             list(IMAGE_MAGIC) if agent.package.manifest.model.images else []),
         default_output_modes=["text/markdown", transcript.MEDIA_TYPE] + (
             [ev.PRIMITIVES_MEDIA_TYPE] if agent.package.manifest.output.primitives else []),
-        supported_interfaces=[AgentInterface(protocol_binding="JSONRPC", url=agent_url(deployment, agent.id) + "/a2a",
+        supported_interfaces=[AgentInterface(protocol_binding="JSONRPC", url=agent_url(deployment, agent.id),
                                              protocol_version=PROTOCOL_VERSION_1_0)],
         provider=AgentProvider(organization="AstralVessel", url="https://github.com/AstralDeep/AstralVessel"),
     )
@@ -432,16 +464,36 @@ class Runtime:
     available: bool = False
 
 
-def authenticate(settings: Settings, request: Request) -> tuple[AppEntry, str] | None:
+@dataclass(frozen=True)
+class Principal:
+    owner: str
+    agents: tuple[str, ...]
+    tool_scopes: frozenset[str] | None
+
+
+def _narrowing(values: Any) -> frozenset[str] | None:
+    # Only Astral's tool scopes narrow; anything else in a scope list is ignored. None means no narrowing.
+    wanted = frozenset(v for v in values if v in SCOPES)
+    return wanted or None
+
+
+async def authenticate(settings: Settings, verifier: Verifier, request: Request) -> Principal | None:
     supplied = request.headers.get("authorization", "")
     if not supplied.startswith("Bearer "):
         return None
-    digest = hashlib.sha256(supplied[7:].encode()).hexdigest()
+    token = supplied[7:]
+    if verifier.issuers and looks_like_jwt(token):
+        caller = await verifier.verify(token)
+        if caller is None:
+            return None
+        return Principal(caller.owner, tuple(caller.issuer.agents), _narrowing(caller.scopes))
+    digest = hashlib.sha256(token.encode()).hexdigest()
     app = next((a for d, a in settings.app_keys.items() if hmac.compare_digest(d, digest)), None)
     user = request.headers.get(USER_HEADER, "")
     if app is None or not USER_ID.fullmatch(user):
         return None
-    return app, user
+    scopes = request.headers.get("x-vessel-scopes")
+    return Principal(f"{app.name}/{user}", tuple(app.agents), _narrowing(scopes.split()) if scopes else None)
 
 
 def create_app(settings: Settings | None = None, runners: dict[str, ToolRunner] | None = None,
@@ -461,6 +513,7 @@ def create_app(settings: Settings | None = None, runners: dict[str, ToolRunner] 
     runtimes: dict[str, Runtime] = {}
     routes: list[Route] = []
     service_clients: list[ServiceClient] = []
+    verifier = Verifier(deployment.issuers)
 
     def refuse(rpc: bool, status: int, code: int, message: str) -> JSONResponse:
         if rpc:
@@ -468,14 +521,12 @@ def create_app(settings: Settings | None = None, runners: dict[str, ToolRunner] 
                                 status_code=status)
         return JSONResponse({"error": message}, status_code=status)
 
-    def gated(endpoint, agent_id: str | None = None):
+    def gated(endpoint, agent_id: str | None = None, rpc: bool = False):
         async def wrapper(request: Request):
-            rpc = request.url.path.endswith("/a2a")
-            found = authenticate(settings, request)
-            if found is None:
+            principal = await authenticate(settings, verifier, request)
+            if principal is None:
                 return refuse(rpc, 401, -32001, "authentication required")
-            app, user = found
-            if agent_id is not None and agent_id not in app.agents:
+            if agent_id is not None and agent_id not in principal.agents:
                 return refuse(rpc, 403, -32003, "this app may not call this agent")
             if agent_id is not None and not runtimes[agent_id].available:
                 return refuse(rpc, 503, -32004, "this agent's sandbox is not ready")
@@ -487,8 +538,9 @@ def create_app(settings: Settings | None = None, runners: dict[str, ToolRunner] 
                     return JSONResponse({"error": "request too large"}, status_code=413)
                 chunks.append(chunk)
             request._body = b"".join(chunks)
-            request.scope[SCOPE_KEY] = f"{app.name}/{user}"
-            request.scope["vessel_app"] = app
+            request.scope[SCOPE_KEY] = principal.owner
+            request.scope["vessel_principal"] = principal
+            request.scope["vessel_tool_scopes"] = principal.tool_scopes
             return await endpoint(request)
         return wrapper
 
@@ -516,8 +568,9 @@ def create_app(settings: Settings | None = None, runners: dict[str, ToolRunner] 
         handler = DefaultRequestHandler(agent_executor=VesselExecutor(agent, runner, model_transport, services),
                                         agent_card=card, task_store=tasks)
         base = f"/agents/{agent_id}"
-        for route in create_jsonrpc_routes(handler, rpc_url=f"{base}/a2a", context_builder=OwnerContextBuilder()):
-            routes.append(Route(route.path, endpoint=gated(route.endpoint, agent_id),
+        # The endpoint's last path segment is the agent id: AstralDeep names an external agent after it.
+        for route in create_jsonrpc_routes(handler, rpc_url=base, context_builder=OwnerContextBuilder()):
+            routes.append(Route(route.path, endpoint=gated(route.endpoint, agent_id, rpc=True),
                                 methods=sorted(route.methods or {"POST"})))
         routes.extend(create_agent_card_routes(card, card_url=f"{base}/.well-known/agent-card.json"))
         routes.append(Route(f"{base}/manifest", gated(manifest_endpoint(agent), agent_id)))
@@ -526,11 +579,11 @@ def create_app(settings: Settings | None = None, runners: dict[str, ToolRunner] 
         return JSONResponse({"ok": True, "agents": {i: r.available for i, r in runtimes.items()}})
 
     async def list_agents(request: Request) -> JSONResponse:
-        app: AppEntry = request.scope["vessel_app"]
+        principal: Principal = request.scope["vessel_principal"]
         return JSONResponse({"agents": [
             {"id": i, "name": r.agent.package.manifest.agent.name, "description": r.card.description,
              "card_url": agent_url(deployment, i) + "/.well-known/agent-card.json", "available": r.available}
-            for i, r in runtimes.items() if i in app.agents]})
+            for i, r in runtimes.items() if i in principal.agents]})
 
     routes += [Route("/health", health), Route("/v1/agents", gated(list_agents))]
 

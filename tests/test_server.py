@@ -90,7 +90,7 @@ async def test_each_agent_has_a_public_card_with_its_scope(vessel):
     card = await client.card("tester")
     assert card["name"] == "tester" and card["capabilities"]["streaming"] is True
     assert card["supportedInterfaces"][0]["protocolVersion"] == "1.0"
-    assert card["supportedInterfaces"][0]["url"] == "http://vessel.test/agents/tester/a2a"
+    assert card["supportedInterfaces"][0]["url"] == "http://vessel.test/agents/tester"
     assert "scope:tools:execute" in card["skills"][0]["tags"]
     assert "application/vnd.astralvessel.transcript+json" in card["defaultOutputModes"]
     assert (await client.card("second"))["name"] == "second"
@@ -109,7 +109,7 @@ async def test_keys_users_and_agent_grants_are_enforced(vessel):
         assert (await raw.get("/agents/tester/manifest", headers=odd)).status_code == 401
         web = {"Authorization": f"Bearer {APP_KEY}", **alice}
         assert (await raw.get("/agents/second/manifest", headers=web)).status_code == 403
-        rpc = await raw.post("/agents/second/a2a", headers=web, json={"jsonrpc": "2.0", "id": 1,
+        rpc = await raw.post("/agents/second", headers=web, json={"jsonrpc": "2.0", "id": 1,
                                                                     "method": "SendMessage", "params": {}})
         assert rpc.status_code == 403 and rpc.json()["error"]["code"] == -32003
     assert [a["id"] for a in await client.agents("alice")] == ["tester"]
@@ -161,11 +161,11 @@ async def test_tasks_belong_to_one_user_of_one_app(vessel, model, deployment_fil
     async with httpx.AsyncClient(transport=transport, base_url="http://vessel.test") as raw:
         def headers(key, user):
             return {"Authorization": f"Bearer {key}", "X-Vessel-User": user, "A2A-Version": "1.0"}
-        task = (await raw.post("/agents/tester/a2a", headers=headers(APP_KEY, "alice"), json=body)).json()["result"]
+        task = (await raw.post("/agents/tester", headers=headers(APP_KEY, "alice"), json=body)).json()["result"]
         assert [m["role"] for m in task["history"]] == ["ROLE_USER"]
         assert all("text" in p for p in task["history"][0]["parts"])
         for key, user in ((APP_KEY, "bob"), (OPS_KEY, "alice")):
-            other = (await raw.post("/agents/tester/a2a", headers=headers(key, user), json=body)).json()
+            other = (await raw.post("/agents/tester", headers=headers(key, user), json=body)).json()
             assert "error" in other
 
 
@@ -211,13 +211,13 @@ async def test_empty_oversized_and_odd_requests_are_rejected(vessel, model):
     assert model.requests == []
     async with httpx.AsyncClient(transport=transport, base_url="http://vessel.test") as raw:
         headers = {"Authorization": f"Bearer {APP_KEY}", "X-Vessel-User": "alice"}
-        r = await raw.post("/agents/tester/a2a", headers=headers, content=b"x" * 16_000_001)
+        r = await raw.post("/agents/tester", headers=headers, content=b"x" * 16_000_001)
         assert r.status_code == 413
 
         async def chunked():
             for _ in range(17):
                 yield b"x" * 1_000_000
-        r = await raw.post("/agents/tester/a2a", headers=headers, content=chunked())
+        r = await raw.post("/agents/tester", headers=headers, content=chunked())
         assert r.status_code == 413
 
 
@@ -269,3 +269,23 @@ async def test_only_a_sandbox_with_the_expected_profile_is_served(deployment_fil
         await asyncio.sleep(0.1)
         client = VesselClient("http://vessel.test", APP_KEY, transport=httpx.ASGITransport(app=app))
         assert (await client.agents("alice"))[0]["available"] is False
+
+
+async def test_an_orchestrator_can_call_the_agent_as_a_structured_skill(vessel, model):
+    # The shape AstralDeep uses for external agents: a tools/call data part, non-streaming, no transcript wanted.
+    client, transport = vessel
+    card = await client.card("tester")
+    assert card["supportedInterfaces"][0]["url"].rstrip("/").split("/")[-1] == "tester"
+    model.replies = [tool_reply("present", {"components": [{"type": "metric", "title": "Pages", "value": "1"}]}),
+                     text_reply("There is one page.")]
+    body = {"jsonrpc": "2.0", "id": "r1", "method": "SendMessage", "params": {"message": {
+        "messageId": "m1", "role": "ROLE_USER", "parts": [{"data": {
+            "method": "tools/call", "name": "tester", "arguments": {"question": "How many pages?"}}}]}}}
+    headers = {"Authorization": f"Bearer {APP_KEY}", "X-Vessel-User": "alice", "A2A-Version": "1.0"}
+    async with httpx.AsyncClient(transport=transport, base_url="http://vessel.test") as raw:
+        task = (await raw.post("/agents/tester", headers=headers, json=body)).json()["result"]["task"]
+    assert task["status"]["state"] == "TASK_STATE_COMPLETED"
+    assert [a["name"] for a in task["artifacts"]] == ["answer"]
+    parts = task["artifacts"][0]["parts"]
+    assert parts[0]["text"] == "There is one page." and parts[1]["data"]["_ui_components"][0]["value"] == "1"
+    assert any(m.get("content") == "How many pages?" for m in model.requests[0]["messages"])
