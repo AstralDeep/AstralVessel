@@ -1,0 +1,25 @@
+/* design@631e72808224 css/components/link.css - copied by design-add. Local edits are allowed; `design-add --check` reports them. */
+/* Text links. Gold underline that darkens to the text color on hover. */
+
+.link {
+  color: var(--ds-color-accent);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--ds-color-gold);
+  text-underline-offset: 0.22em;
+  transition: text-decoration-color var(--ds-duration-fast) var(--ds-ease);
+}
+
+.link:hover {
+  text-decoration-color: currentColor;
+}
+
+/* A link that reads as body text until hovered. */
+.link--quiet {
+  color: inherit;
+  text-decoration-color: transparent;
+}
+
+.link--quiet:hover {
+  text-decoration-color: var(--ds-color-gold);
+}

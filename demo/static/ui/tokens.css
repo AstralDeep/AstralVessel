@@ -1,0 +1,125 @@
+/* design@631e72808224 dist/tokens.css - copied by design-add. Local edits are allowed; `design-add --check` reports them. */
+/* Generated from tokens/tokens.json by bin/build-tokens.mjs. Do not edit by hand. */
+
+:root {
+  --ds-raw-paper: #FFFFFF;
+  --ds-raw-mist: #F6F6F8;
+  --ds-raw-ink: #0F1420;
+  --ds-raw-slate: #686D7A;
+  --ds-raw-haze: #E3E4E8;
+  --ds-raw-midnight: #0F1A33;
+  --ds-raw-champagne: #F2E3BE;
+  --ds-raw-gold: #9A7B34;
+  --ds-raw-gold-deep: #7A6128;
+  --ds-raw-night: #0A0F1C;
+  --ds-raw-night-raised: #121A2C;
+  --ds-raw-parchment: #F1ECDF;
+  --ds-raw-fog: #A0A6B6;
+  --ds-raw-night-rule: #232C42;
+  --ds-raw-gold-bright: #E2C680;
+  --ds-raw-garnet: #9B2C2C;
+  --ds-raw-coral: #E5867B;
+  --ds-raw-pine: #2E6B4A;
+  --ds-raw-sage: #7FC29C;
+  --ds-raw-overlay-red: #FF453A;
+  --ds-raw-overlay-yellow: #FFD60A;
+  --ds-raw-overlay-green: #32D74B;
+  --ds-raw-overlay-cyan: #40C8E0;
+  --ds-raw-overlay-magenta: #FF2D92;
+
+  --ds-font-display: "Libre Caslon Display", "Libre Caslon Text", Georgia, "Times New Roman", serif;
+  --ds-font-text: "Libre Caslon Text", Georgia, "Times New Roman", serif;
+  --ds-font-body: "Public Sans", "Helvetica Neue", Arial, system-ui, sans-serif;
+  --ds-font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+  --ds-text-xs: 0.75rem;
+  --ds-text-sm: 0.875rem;
+  --ds-text-base: 1rem;
+  --ds-text-md: 1.125rem;
+  --ds-text-lg: 1.375rem;
+  --ds-text-xl: 1.75rem;
+  --ds-text-2xl: 2.25rem;
+  --ds-text-3xl: 3rem;
+  --ds-text-display: clamp(2.75rem, 1.9rem + 4.2vw, 5.25rem);
+  --ds-text-eyebrow: 0.6875rem;
+  --ds-leading-tight: 1.08;
+  --ds-leading-snug: 1.3;
+  --ds-leading-body: 1.6;
+  --ds-tracking-eyebrow: 0.26em;
+  --ds-tracking-tag: 0.12em;
+  --ds-tracking-display: -0.01em;
+  --ds-weight-regular: 400;
+  --ds-weight-medium: 500;
+  --ds-weight-semibold: 600;
+  --ds-weight-bold: 700;
+  --ds-space-1: 0.25rem;
+  --ds-space-2: 0.5rem;
+  --ds-space-3: 0.75rem;
+  --ds-space-4: 1rem;
+  --ds-space-5: 1.5rem;
+  --ds-space-6: 2rem;
+  --ds-space-7: 3rem;
+  --ds-space-8: 4rem;
+  --ds-space-9: 6rem;
+  --ds-radius-none: 0;
+  --ds-radius-pill: 999px;
+  --ds-rule-hairline: 1px;
+  --ds-rule-double: 3px;
+  --ds-rule-card: 1px;
+  --ds-measure: 65ch;
+  --ds-container: 72rem;
+  --ds-container-narrow: 44rem;
+  --ds-duration-fast: 120ms;
+  --ds-duration-base: 200ms;
+  --ds-ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+  --ds-color-bg: #FFFFFF;
+  --ds-color-surface: #F6F6F8;
+  --ds-color-ink: #0F1420;
+  --ds-color-muted: #686D7A;
+  --ds-color-rule: #E3E4E8;
+  --ds-color-accent: #0F1A33;
+  --ds-color-on-accent: #F2E3BE;
+  --ds-color-gold: #9A7B34;
+  --ds-color-gold-text: #7A6128;
+  --ds-color-focus: #0F1A33;
+  --ds-color-danger: #9B2C2C;
+  --ds-color-success: #2E6B4A;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --ds-color-bg: #0A0F1C;
+    --ds-color-surface: #121A2C;
+    --ds-color-ink: #F1ECDF;
+    --ds-color-muted: #A0A6B6;
+    --ds-color-rule: #232C42;
+    --ds-color-accent: #E2C680;
+    --ds-color-on-accent: #0A0F1C;
+    --ds-color-gold: #E2C680;
+    --ds-color-gold-text: #E2C680;
+    --ds-color-focus: #E2C680;
+    --ds-color-danger: #E5867B;
+    --ds-color-success: #7FC29C;
+  }
+}
+
+[data-theme="dark"] {
+  color-scheme: dark;
+  --ds-color-bg: #0A0F1C;
+  --ds-color-surface: #121A2C;
+  --ds-color-ink: #F1ECDF;
+  --ds-color-muted: #A0A6B6;
+  --ds-color-rule: #232C42;
+  --ds-color-accent: #E2C680;
+  --ds-color-on-accent: #0A0F1C;
+  --ds-color-gold: #E2C680;
+  --ds-color-gold-text: #E2C680;
+  --ds-color-focus: #E2C680;
+  --ds-color-danger: #E5867B;
+  --ds-color-success: #7FC29C;
+}

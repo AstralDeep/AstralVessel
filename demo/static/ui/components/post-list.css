@@ -1,0 +1,61 @@
+/* design@631e72808224 css/components/post-list.css - copied by design-add. Local edits are allowed; `design-add --check` reports them. */
+/* Post list: dated entries for writing, notes or talks. */
+
+.post-list {
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  list-style: none;
+}
+
+.post-list__item {
+  display: grid;
+  grid-template-columns: 8.5rem minmax(0, 1fr);
+  gap: var(--ds-space-1) var(--ds-space-5);
+  padding-block: var(--ds-space-4);
+  border-bottom: var(--ds-rule-hairline) solid var(--ds-color-rule);
+}
+
+.post-list__item:first-child {
+  border-top: var(--ds-rule-hairline) solid var(--ds-color-rule);
+}
+
+.post-list__date {
+  padding-top: 0.3em;
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  color: var(--ds-color-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.post-list__title {
+  font-family: var(--ds-font-text);
+  font-size: var(--ds-text-md);
+  line-height: var(--ds-leading-snug);
+}
+
+.post-list__title a {
+  color: var(--ds-color-ink);
+  text-decoration-color: transparent;
+}
+
+.post-list__title a:hover {
+  text-decoration-color: var(--ds-color-gold);
+}
+
+.post-list__summary {
+  grid-column: 2;
+  font-size: var(--ds-text-sm);
+  color: var(--ds-color-muted);
+  max-width: var(--ds-measure);
+}
+
+@media (max-width: 40rem) {
+  .post-list__item {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .post-list__summary {
+    grid-column: 1;
+  }
+}

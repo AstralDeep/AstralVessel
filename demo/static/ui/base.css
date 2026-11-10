@@ -1,0 +1,217 @@
+/* design@631e72808224 css/base.css - copied by design-add. Local edits are allowed; `design-add --check` reports them. */
+/* Base: reset, page defaults, type scale, prose, focus, motion.
+   Load after fonts.css and tokens.css. Uses only --ds-* tokens. */
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+* {
+  margin: 0;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+}
+
+body {
+  min-height: 100vh;
+  background: var(--ds-color-bg);
+  color: var(--ds-color-ink);
+  font-family: var(--ds-font-body);
+  font-size: var(--ds-text-base);
+  line-height: var(--ds-leading-body);
+  font-weight: var(--ds-weight-regular);
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+img,
+picture,
+video,
+canvas,
+svg {
+  display: block;
+  max-width: 100%;
+}
+
+input,
+button,
+textarea,
+select {
+  font: inherit;
+  color: inherit;
+}
+
+p,
+li,
+figcaption {
+  text-wrap: pretty;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-weight: var(--ds-weight-regular);
+  line-height: var(--ds-leading-snug);
+  text-wrap: balance;
+  overflow-wrap: break-word;
+}
+
+h1 {
+  font-family: var(--ds-font-display);
+  font-size: var(--ds-text-3xl);
+  line-height: var(--ds-leading-tight);
+  letter-spacing: var(--ds-tracking-display);
+}
+
+h2 {
+  font-family: var(--ds-font-display);
+  font-size: var(--ds-text-2xl);
+  line-height: var(--ds-leading-tight);
+}
+
+h3 {
+  font-family: var(--ds-font-text);
+  font-weight: var(--ds-weight-bold);
+  font-size: var(--ds-text-lg);
+}
+
+h4 {
+  font-family: var(--ds-font-body);
+  font-weight: var(--ds-weight-semibold);
+  font-size: var(--ds-text-md);
+}
+
+small {
+  font-size: var(--ds-text-sm);
+}
+
+code,
+kbd,
+samp,
+pre {
+  font-family: var(--ds-font-mono);
+  font-size: 0.92em;
+}
+
+a {
+  color: var(--ds-color-accent);
+  text-decoration-line: underline;
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--ds-color-gold);
+  text-underline-offset: 0.22em;
+  transition: text-decoration-color var(--ds-duration-fast) var(--ds-ease);
+}
+
+a:hover {
+  text-decoration-color: currentColor;
+}
+
+::selection {
+  background: var(--ds-color-accent);
+  color: var(--ds-color-on-accent);
+}
+
+:focus-visible {
+  outline: 2px solid var(--ds-color-focus);
+  outline-offset: 3px;
+}
+
+:focus:not(:focus-visible) {
+  outline: none;
+}
+
+/* Long-form text: posts, notes, READMEs */
+.prose {
+  max-width: var(--ds-measure);
+  font-size: var(--ds-text-md);
+  line-height: var(--ds-leading-body);
+}
+
+.prose > * + * {
+  margin-top: var(--ds-space-4);
+}
+
+.prose > h2,
+.prose > h3 {
+  margin-top: var(--ds-space-7);
+}
+
+.prose > h2 + *,
+.prose > h3 + * {
+  margin-top: var(--ds-space-3);
+}
+
+.prose ul,
+.prose ol {
+  padding-left: var(--ds-space-5);
+}
+
+.prose li + li {
+  margin-top: var(--ds-space-2);
+}
+
+.prose blockquote {
+  border-left: var(--ds-rule-card) solid var(--ds-color-gold);
+  padding-left: var(--ds-space-5);
+  font-family: var(--ds-font-text);
+  font-style: italic;
+  color: var(--ds-color-muted);
+}
+
+.prose pre {
+  overflow-x: auto;
+  padding: var(--ds-space-4);
+  background: var(--ds-color-surface);
+  border: var(--ds-rule-hairline) solid var(--ds-color-rule);
+  font-size: var(--ds-text-sm);
+  line-height: var(--ds-leading-snug);
+}
+
+.prose :not(pre) > code {
+  padding: 0.1em 0.3em;
+  background: var(--ds-color-surface);
+  border: var(--ds-rule-hairline) solid var(--ds-color-rule);
+}
+
+.prose hr {
+  border: 0;
+  border-top: var(--ds-rule-double) double var(--ds-color-gold);
+  margin-block: var(--ds-space-7);
+}
+
+.prose table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--ds-text-sm);
+  font-variant-numeric: tabular-nums;
+}
+
+.prose th,
+.prose td {
+  text-align: left;
+  padding: var(--ds-space-2) var(--ds-space-3);
+  border-bottom: var(--ds-rule-hairline) solid var(--ds-color-rule);
+}
+
+.prose th {
+  font-weight: var(--ds-weight-semibold);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

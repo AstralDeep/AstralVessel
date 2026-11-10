@@ -1,0 +1,14 @@
+/* design@631e72808224 css/components/rule.css - copied by design-add. Local edits are allowed; `design-add --check` reports them. */
+/* Dividers. The double gold rule is the signature detail; use it between major sections. */
+
+.rule-double {
+  height: 0;
+  border: 0;
+  border-top: var(--ds-rule-double) double var(--ds-color-gold);
+}
+
+.rule {
+  height: 0;
+  border: 0;
+  border-top: var(--ds-rule-hairline) solid var(--ds-color-rule);
+}

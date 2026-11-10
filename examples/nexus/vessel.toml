@@ -1,0 +1,30 @@
+[agent]
+name = "nexus"
+description = "Answers questions about University of Kentucky research (people, topics, methods, grants) from the ccts-kg vault."
+version = "0.1.0"
+examples = [
+  "Who are the most published Alzheimer's disease researchers at UK, and how has the field grown?",
+  "Give me a profile of Frederick A Schmitt: topics, methods, and output by year.",
+  "Which UK researchers use CRISPR, and in which departments?",
+]
+
+[model]
+endpoint = "env:VESSEL_MODEL_URL"
+api_key = "env:VESSEL_MODEL_KEY"
+model = "zai-org/GLM-5.3-Flash"
+temperature = 0.2
+max_steps = 30
+
+[tools]
+builtin = ["read", "grep", "glob", "list", "bash", "webfetch", "websearch"]
+declared = ["tools/find_pages.toml", "tools/profile.toml"]
+
+[sandbox]
+workdir = "/vault"
+mounts = [{ source = "vault", target = "/vault", read_only = true }]
+deadline_seconds = 600
+tool_timeout_seconds = 60
+tool_output_chars = 20000
+
+[output]
+primitives = true

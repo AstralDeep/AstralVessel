@@ -25,3 +25,11 @@ __pycache__/
 .DS_Store
 .idea/
 .claude/settings.local.json
+
+# === AstralVessel ===
+.env
+*.env
+!.env.example
+*.sqlite
+*.sqlite-*
+vessel-data/

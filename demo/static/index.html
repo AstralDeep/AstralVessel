@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AstralVessel Demo</title>
+  <script src="/static/ui/js/theme-toggle.js"></script>
+  <link rel="stylesheet" href="/static/ui/ui.css">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+</head>
+<body>
+  <div class="container container--wide">
+    <header class="site-header">
+      <a class="site-header__brand" href="/">AstralVessel</a>
+      <nav class="nav">
+        <a class="nav__link" href="/" aria-current="page">Live demo</a>
+        <a class="nav__link" href="https://github.com/EvanDamron/AstralVessel/blob/main/PROPOSAL.md">Proposal</a>
+        <a class="nav__link" href="https://github.com/EvanDamron/AstralVessel/blob/main/docs/first-principles.md">First principles</a>
+      </nav>
+      <button class="theme-toggle" type="button" data-theme-toggle>Dark</button>
+    </header>
+
+    <header class="masthead">
+      <span class="eyebrow">AstralVessel · live demo</span>
+      <h1 class="display">Nexus, in a Vessel</h1>
+      <p class="masthead__lede text text--lead">
+        A research agent over <span id="page-count">138,075</span> pages of University of Kentucky research,
+        served by AstralVessel: questions arrive over A2A, tools run in a sealed sandbox, the model is reached only
+        through egress, and answers come back as Markdown plus AstralPrimitives that Astral can render.
+      </p>
+    </header>
+
+    <section class="pipeline" aria-label="Where the work is happening">
+      <div class="pipeline__node" data-node="app"><span class="pipeline__label">Demo app</span><span class="pipeline__sub">holds the key</span></div>
+      <div class="pipeline__wire" data-wire="a2a"><span>A2A 1.0</span></div>
+      <div class="pipeline__node" data-node="vessel"><span class="pipeline__label">Vessel</span><span class="pipeline__sub">loop · sessions</span></div>
+      <div class="pipeline__wire" data-wire="tools"><span>tools</span></div>
+      <div class="pipeline__node" data-node="sandbox"><span class="pipeline__label">Sandbox</span><span class="pipeline__sub">no network · read-only</span></div>
+      <div class="pipeline__wire" data-wire="model"><span>model</span></div>
+      <div class="pipeline__node" data-node="egress"><span class="pipeline__label">Egress</span><span class="pipeline__sub">adds the key</span></div>
+      <div class="pipeline__wire" data-wire="llm"><span>HTTPS</span></div>
+      <div class="pipeline__node" data-node="model"><span class="pipeline__label" id="model-name">GLM 5.3</span><span class="pipeline__sub">LLM Factory</span></div>
+    </section>
+
+    <hr class="rule-double">
+
+    <div class="workspace">
+      <aside class="workspace__side" aria-label="Personas and conversations">
+        <div class="stack stack--sm">
+          <span class="eyebrow">Signed in as</span>
+          <div class="persona-switch" role="radiogroup" aria-label="Demo persona" id="personas"></div>
+          <p class="text text--small text--muted">Each persona is a different end user. Conversations are bound to their owner.</p>
+        </div>
+        <div class="stack stack--sm">
+          <div class="cluster cluster--between">
+            <span class="eyebrow">Conversations</span>
+            <button class="link link--quiet text--small" type="button" id="new-chat">New</button>
+          </div>
+          <ul class="conv-list" id="conversations"></ul>
+        </div>
+      </aside>
+
+      <main class="workspace__main" aria-label="Conversation">
+        <div class="transcript" id="transcript" aria-live="polite">
+          <div class="empty" id="empty">
+            <p class="heading heading--3">Ask about UK research</p>
+            <p class="text text--muted">Try one of these, or ask your own.</p>
+            <div class="examples" id="examples"></div>
+          </div>
+        </div>
+        <form class="composer" id="composer">
+          <label class="field__label visually-hidden" for="question">Question</label>
+          <textarea class="textarea composer__input" id="question" rows="2" maxlength="4000"
+                    placeholder="Who at UK works on Alzheimer's disease, and how has the field grown?"></textarea>
+          <div class="composer__actions">
+            <button class="btn" type="submit" id="send">Ask</button>
+            <button class="btn btn--secondary" type="button" id="stop" hidden>Stop</button>
+          </div>
+        </form>
+      </main>
+
+      <aside class="workspace__inspect" aria-label="Inspector">
+        <div class="tabs" role="tablist">
+          <button class="tabs__tab" role="tab" aria-selected="true" data-tab="timeline">Inside the turn</button>
+          <button class="tabs__tab" role="tab" aria-selected="false" data-tab="frames">A2A frames</button>
+          <button class="tabs__tab" role="tab" aria-selected="false" data-tab="manifest">Agent</button>
+          <button class="tabs__tab" role="tab" aria-selected="false" data-tab="isolation">Isolation</button>
+        </div>
+        <section class="tabs__panel" data-panel="timeline">
+          <div class="turn-stats" id="turn-stats"></div>
+          <ol class="timeline" id="timeline"><li class="timeline__empty text text--muted">Events from the current turn appear here as they stream.</li></ol>
+        </section>
+        <section class="tabs__panel" data-panel="frames" hidden>
+          <p class="text text--small text--muted">Every JSON-RPC frame the Vessel streamed for the current turn, exactly as received.</p>
+          <ol class="frames" id="frames"></ol>
+        </section>
+        <section class="tabs__panel" data-panel="manifest" hidden>
+          <div id="manifest" class="stack"></div>
+        </section>
+        <section class="tabs__panel" data-panel="isolation" hidden>
+          <div class="stack">
+            <p class="text">Conversations belong to the user who started them. Try to open the selected conversation as the <em>other</em> persona.</p>
+            <button class="btn btn--secondary" type="button" id="isolation-test">Try to read it as the other user</button>
+            <div id="isolation-result"></div>
+          </div>
+        </section>
+      </aside>
+    </div>
+
+    <footer class="site-footer">
+      <span class="text text--small text--muted">AstralVessel 0.1 · Apache 2.0 · Evan Damron</span>
+    </footer>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

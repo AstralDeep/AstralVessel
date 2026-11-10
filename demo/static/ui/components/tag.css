@@ -1,0 +1,23 @@
+/* design@631e72808224 css/components/tag.css - copied by design-add. Local edits are allowed; `design-add --check` reports them. */
+/* Tag: gold-outlined uppercase mono label for type, date or status. */
+
+.tag {
+  display: inline-block;
+  padding: 0.2em 0.65em;
+  border: var(--ds-rule-hairline) solid var(--ds-color-gold);
+  border-radius: var(--ds-radius-none);
+  color: var(--ds-color-gold-text);
+  font-family: var(--ds-font-mono);
+  font-size: var(--ds-text-xs);
+  font-weight: var(--ds-weight-regular);
+  letter-spacing: var(--ds-tracking-tag);
+  line-height: var(--ds-leading-snug);
+  text-transform: uppercase;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.tag--muted {
+  border-color: var(--ds-color-rule);
+  color: var(--ds-color-muted);
+}
