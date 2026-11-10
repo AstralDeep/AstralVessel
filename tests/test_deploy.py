@@ -81,6 +81,11 @@ def test_compose_isolates_each_sandbox_and_keeps_secrets_out(data_package, tmp_p
     assert vessel["environment"]["WEB_KEY_SHA256"].startswith("${WEB_KEY_SHA256:?")
     assert "tools-guide" in vessel["networks"] and "outside" not in vessel["networks"]
     assert spec["services"]["egress"]["networks"] == ["egress", "outside"]
+    shared = 'mounts = [{ target = "/data", source = "volume:shared-corpus" }]'
+    path.write_text(deployment_text(data_package, mounts=shared))
+    named = generate(load_deployment(path), repo_root=None)
+    assert named["services"]["sandbox-guide"]["volumes"][1] == "shared-corpus:/data:ro"
+    assert named["volumes"]["shared-corpus"] == {"external": True}
     master = "master-secret-123456"
     out = tmp_path / "compose.generated.yml"
     write(deployment, out, repo_root=None, master_token=master)

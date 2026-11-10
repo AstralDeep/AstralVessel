@@ -30,7 +30,10 @@ def _env_ref(value: str) -> str:
 
 
 def _source(deployment: Deployment, source: str) -> str:
-    # A relative mount source is relative to the deployment file, like an agent's package path.
+    # "volume:NAME" is an existing Docker volume (for data another stack writes); a relative path is relative to
+    # the deployment file, like an agent's package path.
+    if source.startswith("volume:"):
+        return source[7:]
     if source.startswith("env:") or os.path.isabs(source):
         return _env_ref(source)
     return str((deployment.path.parent / source).resolve())
@@ -111,7 +114,12 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
         "mem_limit": "1g", "pids_limit": 256,
         "depends_on": ["egress", *(f"sandbox-{a}" for a in deployment.agents)],
     }
-    return {"name": "astralvessel", "services": services, "networks": networks, "volumes": {"vessel_data": {}}}
+    volumes: dict[str, Any] = {"vessel_data": {}}
+    for agent in deployment.agents.values():
+        for mount in agent.profile.mounts:
+            if mount.source.startswith("volume:"):
+                volumes[mount.source[7:]] = {"external": True}
+    return {"name": "astralvessel", "services": services, "networks": networks, "volumes": volumes}
 
 
 def write(deployment: Deployment, out: Path, *, repo_root: Path | None, master_token: str) -> list[Path]:
