@@ -47,6 +47,10 @@ def readable(markup: str) -> str:
     return re.sub(r"\n\s*\n+", "\n\n", text).strip()
 
 
+def _clean(fragment: str) -> str:
+    return html.unescape(re.sub(r"<[^>]+>", "", fragment)).strip()
+
+
 def _client() -> httpx.AsyncClient:
     proxy = os.environ.get("VESSEL_WEB_PROXY") or None
     return httpx.AsyncClient(proxy=proxy, timeout=httpx.Timeout(30, connect=10), follow_redirects=True,
@@ -99,8 +103,8 @@ async def websearch(args: dict[str, Any]) -> tuple[str, bool]:
         if "uddg=" in href:
             href = unquote(parse_qs(urlparse(href).query).get("uddg", [href])[0])
         snippet = re.search(r'class="result__snippet"[^>]*>(.*?)</a>', block, re.DOTALL)
-        clean = lambda s: html.unescape(re.sub(r"<[^>]+>", "", s)).strip()
-        results.append(f"{clean(link.group(2))}\n{href}\n{clean(snippet.group(1)) if snippet else ''}".strip())
+        title, summary = _clean(link.group(2)), _clean(snippet.group(1)) if snippet else ""
+        results.append(f"{title}\n{href}\n{summary}".strip())
         if len(results) >= cap:
             break
     return ("\n\n".join(results) or "no results"), False

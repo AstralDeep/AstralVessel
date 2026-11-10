@@ -16,7 +16,7 @@ Supported component shapes (JSON):
 - {"type":"metric","title":"Researchers","value":"35,740","subtitle":"optional"}
 - {"type":"stat_group","title":"optional","items":[{"label":"Outputs","value":"76,080"}]}
 - {"type":"table","title":"optional","headers":["Name","Outputs"],"rows":[["A. Smith",12],["B. Jones",9]]}
-- {"type":"bar_chart","title":"Outputs by year","labels":["2022","2023"],"datasets":[{"label":"Outputs","data":[10,14]}]}
+- {"type":"bar_chart","title":"By year","labels":["2022","2023"],"datasets":[{"label":"Outputs","data":[10,14]}]}
 - {"type":"line_chart","title":"Trend","labels":["2022","2023"],"datasets":[{"label":"Rate","data":[1.5,1.9]}]}
 - {"type":"key_value","title":"optional","items":[{"key":"ORCID","value":"0000-0002-..."}]}
 - {"type":"list","items":["first","second"],"ordered":false}
