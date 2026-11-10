@@ -36,16 +36,12 @@ AstralVessel replaces OpenCode and that scaffolding with one component that is:
 - **Lighter.** It is a Python package and a container. It has no coding-assistant features to switch
   off and no private API that shifts between releases.
 - **Open.** Every interface is a published standard: A2A for conversations, the OpenAI-compatible API
-  for models, and AstralPrimitives for rich output. They are described in a written spec with
-  conformance checks, under Apache 2.0 like the rest of Astral.
+  for models, and AstralPrimitives for rich output. A conformance suite checks any harness against
+  them, and the code is under Apache 2.0 like the rest of Astral.
 - **Astral-ready.** It speaks the same protocols as AstralDeep. Eventually it could slot in as the
   harness and sandbox AstralDeep uses, and an agent built for AstralVessel could move into Astral
   without being rewritten. A small, self-contained harness could also help run agents closer to
   Astral's clients when that makes sense.
-
-The full case, with the costs counted, is in [PROPOSAL.md](PROPOSAL.md).
-[docs/first-principles.md](docs/first-principles.md) explains every concept from scratch.
-[spec/SPEC.md](spec/SPEC.md) is the normative standard.
 
 ## How it works
 
@@ -79,8 +75,7 @@ browser ─▶ app ──A2A 1.0──▶ vessel (loop, sessions) ──HTTP─�
 | `examples/nexus/` | The research nexus agent over the ccts-kg vault, with two declared tools |
 | `demo/` | An interactive demo app that sits in front of a Vessel and shows each turn's steps, A2A frames and isolation |
 | `deploy/` | Docker Compose deployment, `.env.example`, and `verify-isolation.sh` |
-| `conformance/run.py` | Conformance checks for any running harness |
-| `spec/SPEC.md` | The standard |
+| `conformance/run.py` | Conformance checks: what any harness claiming to follow the standard must pass |
 | `tests/` | Unit and service tests with a scripted model |
 
 ## Run the demo
