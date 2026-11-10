@@ -18,7 +18,7 @@ check "sandbox cannot reach the model host directly"    not_reach $SB api-llm-fa
 check "sandbox cannot reach the harness API"            not_reach $SB vessel 8700
 check "sandbox cannot reach the harness's front address" not_reach $SB 172.31.247.10 8700
 check "one agent's sandbox cannot reach another's"      not_reach $SB sandbox-field-guide-reader 8710
-check "sandbox holds no task or conversation store"     py $SB 'import glob,sys; sys.exit(1 if glob.glob("/data/*") or [p for d in ("/opt","/home","/tmp","/agent") for p in glob.glob(d + "/**/*.sqlite", recursive=True)] else 0)'
+check "sandbox holds no task or conversation store"     py $SB 'import glob,sys; sys.exit(1 if [p for d in ("/opt","/home","/tmp","/agent","/data") for e in ("sqlite","db") for p in glob.glob(d + "/**/*." + e, recursive=True)] else 0)'
 check "sandbox environment holds no model or app key"   py $SB 'import os,sys; sys.exit(1 if any(k in os.environ for k in ("VESSEL_APP_KEY","VESSEL_APP_KEY_SHA256","VESSEL_MODEL_KEY","LLM_API_KEY")) else 0)'
 check "sandbox holds its own token, not the master"     py $SB "import os,sys; sys.exit(1 if os.environ['VESSEL_SANDBOX_TOKEN'] == '$(. ./.env; echo "$VESSEL_SANDBOX_TOKEN")' else 0)"
 check "sandbox root filesystem is read-only"            py $SB 'import sys
