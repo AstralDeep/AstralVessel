@@ -1,6 +1,7 @@
 /* Demo page layout on the house tokens: pipeline strip, three-column workspace, transcript, inspector. */
 
 .container--wide { max-width: calc(var(--ds-container) * 1.4); }
+[hidden] { display: none !important; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 
 /* Pipeline strip */

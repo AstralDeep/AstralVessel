@@ -36,7 +36,7 @@ def render_primitives(components: list[dict[str, Any]]) -> str:
     return render_for_target("web", components)
 
 
-def create_app() -> Starlette:
+def create_app():
     client = VesselClient(os.environ.get("VESSEL_URL", "http://vessel:8700"), os.environ["VESSEL_APP_KEY"])
 
     def persona(value: Any) -> dict[str, str] | None:
@@ -97,7 +97,10 @@ def create_app() -> Starlette:
             return JSONResponse({"error": "nothing to render"}, status_code=400)
         return JSONResponse({"html": render_primitives(components)})
 
-    routes = [
+    astral = projection_static()
+    routes = [] if astral is None else [Mount("/static/fonts", StaticFiles(directory=astral / "fonts"), name="fonts"),
+                                        Mount("/astral", StaticFiles(directory=astral), name="astral")]
+    routes += [
         Route("/", index),
         Route("/api/meta", meta),
         Route("/api/conversations", conversations),
@@ -107,10 +110,24 @@ def create_app() -> Starlette:
         Route("/api/render", render, methods=["POST"]),
         Mount("/static", StaticFiles(directory=HERE / "static"), name="static"),
     ]
-    astral = projection_static()
-    if astral is not None:
-        routes.append(Mount("/astral", StaticFiles(directory=astral), name="astral"))
-    return Starlette(routes=routes)
+    return CrossOriginAssets(Starlette(routes=routes))
+
+
+class CrossOriginAssets:
+    # The sandboxed preview frame has an opaque origin, so its font and script loads are cross-origin
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] != "http" or not scope["path"].startswith(("/astral/", "/static/fonts/")):
+            return await self.app(scope, receive, send)
+
+        async def send_with_cors(message):
+            if message["type"] == "http.response.start":
+                message["headers"] = [*message.get("headers", []), (b"access-control-allow-origin", b"*")]
+            await send(message)
+
+        return await self.app(scope, receive, send_with_cors)
 
 
 app = create_app() if os.environ.get("VESSEL_APP_KEY") else None

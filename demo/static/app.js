@@ -21,7 +21,8 @@
 
   function markdown(text) {
     if (window.marked && window.DOMPurify) {
-      return DOMPurify.sanitize(marked.parse(text || "", { gfm: true, breaks: false }),
+      var safe = (text || "").replace(/(^|[^~])~(?!~)/g, "$1\\~");
+      return DOMPurify.sanitize(marked.parse(safe, { gfm: true, breaks: false }),
                                 { ADD_ATTR: ["target"], FORBID_TAGS: ["style", "form", "input"] });
     }
     var div = document.createElement("div"); div.textContent = text || ""; return div.innerHTML;
@@ -162,10 +163,10 @@
   var ASTRAL_HEAD = '<!doctype html><html><head><meta charset="utf-8">' +
     '<link rel="stylesheet" href="/astral/astral.css"><script src="/astral/vendor/tailwind.js"><\/script>' +
     "<script>tailwind.config={theme:{extend:{colors:{'astral-bg':'rgb(var(--astral-bg) / <alpha-value>)','astral-surface':'rgb(var(--astral-surface) / <alpha-value>)','astral-primary':'rgb(var(--astral-primary) / <alpha-value>)','astral-secondary':'rgb(var(--astral-secondary) / <alpha-value>)','astral-text':'rgb(var(--astral-text) / <alpha-value>)','astral-muted':'rgb(var(--astral-muted) / <alpha-value>)','astral-accent':'rgb(var(--astral-accent) / <alpha-value>)'}}}};<\/script>" +
-    '<script src="/astral/vendor/plotly.min.js"><\/script><style>body{margin:0;padding:16px}<\/style></head><body class="bg-astral-bg text-astral-text">';
+    '<script src="/astral/vendor/plotly.min.js"><\/script><style>html,body{height:auto!important;overflow:visible!important}body{margin:0;padding:16px}.dynamic-renderer>*{animation:none!important;opacity:1!important;transform:none!important}<\/style></head><body class="bg-astral-bg text-astral-text">';
 
   function astralPreview(components) {
-    var frame = el("iframe", { class: "astral-preview__frame", sandbox: "allow-scripts", title: "AstralProjection rendering", loading: "lazy" });
+    var frame = el("iframe", { class: "astral-preview__frame", sandbox: "allow-scripts", title: "AstralProjection rendering" });
     var box = el("div", { class: "astral-preview" }, [
       el("div", { class: "cluster cluster--between" }, [el("span", { class: "eyebrow", text: "Rendered by AstralProjection" }),
         el("span", { class: "tag", text: components.length + " primitives" })]),
