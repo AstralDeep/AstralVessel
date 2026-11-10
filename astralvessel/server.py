@@ -278,7 +278,8 @@ def create_app(settings: Settings | None = None, runner: ToolRunner | None = Non
         m = package.manifest
         return JSONResponse({
             "agent": m.agent.model_dump(), "model": {"model": m.model.model, "max_steps": m.model.max_steps},
-            "tools": [*m.tools.builtin, *(t.name for t in package.declared), *(["present"] if m.output.primitives else [])],
+            "tools": [*m.tools.builtin, *(t.name for t in package.declared),
+                      *(["present"] if m.output.primitives else [])],
             "sandbox": {"mounts": [x.model_dump() for x in m.sandbox.mounts],
                         "deadline_seconds": m.sandbox.deadline_seconds},
             "output": m.output.model_dump(), "primitives_schema": schema_version(),

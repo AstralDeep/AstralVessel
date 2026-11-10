@@ -2,7 +2,7 @@
 
 | | |
 |---|---|
-| Status | Draft for discussion |
+| Status | Draft for discussion; version 0.1 of the reference harness and a live demo are built (see README.md) |
 | Author | Evan Damron |
 | Date | 2026-11-09 |
 | Audience | Sam (AstralDeep lead), Evan's collaborators on uk-knowledgegraph and InFocus-Agent, future open-source contributors |

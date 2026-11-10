@@ -12,6 +12,7 @@ MAX_BYTES = 200_000
 PRESENT_DESCRIPTION = """Attach rich, structured visuals to your final answer (tables, metrics, charts, cards).
 Call it once, after you have the facts, with the components to show. Your written answer must still
 stand on its own in Markdown; components are an addition, never a replacement.
+Give every table and chart a short, specific title.
 Supported component shapes (JSON):
 - {"type":"metric","title":"Researchers","value":"35,740","subtitle":"optional"}
 - {"type":"stat_group","title":"optional","items":[{"label":"Outputs","value":"76,080"}]}
