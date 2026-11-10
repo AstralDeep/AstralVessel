@@ -49,9 +49,13 @@ class Store:
     async def claim(self, owner: str, conversation_id: str, title: str) -> bool:
         def work() -> bool:
             row = self._db.execute("SELECT owner FROM conversations WHERE id = ?", (conversation_id,)).fetchone()
-            if row is not None:
-                return row["owner"] == owner
             now = time.time()
+            if row is not None:
+                if row["owner"] != owner:
+                    return False
+                # Touch it now, so the idle sweep cannot delete a conversation while its turn runs.
+                self._db.execute("UPDATE conversations SET updated = ? WHERE id = ?", (now, conversation_id))
+                return True
             self._db.execute("INSERT INTO conversations VALUES (?, ?, ?, ?, ?)",
                              (conversation_id, owner, title[:120] or "Conversation", now, now))
             return True
@@ -112,10 +116,11 @@ class Store:
             return cur.rowcount > 0
         return await self._run(work)
 
-    async def sweep(self, idle_seconds: float) -> int:
-        def work() -> int:
-            cur = self._db.execute("DELETE FROM conversations WHERE updated < ?", (time.time() - idle_seconds,))
-            return cur.rowcount
+    async def sweep(self, idle_seconds: float) -> list[tuple[str, str]]:
+        def work() -> list[tuple[str, str]]:
+            rows = self._db.execute("DELETE FROM conversations WHERE updated < ? RETURNING owner, id",
+                                    (time.time() - idle_seconds,)).fetchall()
+            return [(r["owner"], r["id"]) for r in rows]
         return await self._run(work)
 
 

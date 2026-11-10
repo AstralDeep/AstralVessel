@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import asyncio
-import fnmatch
+import contextlib
 import json
 import os
 import shutil
+import time
 from pathlib import Path
 from typing import Any
 
@@ -17,6 +18,11 @@ SANDBOX_TOOLS = ("read", "grep", "glob", "list", "bash")
 WEB_TOOLS = ("webfetch", "websearch")
 SAFE_ENV = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C.UTF-8",
             "HOME": "/tmp", "TMPDIR": "/tmp"}
+# Session ids of tool processes still running; the sandbox server kills every other process it finds.
+ACTIVE_SESSIONS: set[int] = set()
+SPAWNING = [0]
+MAX_OUTPUT_BYTES = 1_000_000
+MAX_LINE_CHARS = 4000
 
 BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
     "read": {
@@ -93,18 +99,27 @@ def _resolve(path: str | None, workdir: str) -> Path:
     return candidate if candidate.is_absolute() else base / candidate
 
 
-async def _proc(argv: list[str], *, cwd: str, timeout: int, shell: bool = False,
-                stdin: bytes | None = None) -> tuple[int, str]:
+async def _spawn(argv: list[str], *, cwd: str, shell: bool) -> asyncio.subprocess.Process:
     if shell:
-        proc = await asyncio.create_subprocess_shell(
+        return await asyncio.create_subprocess_shell(
             argv[0], cwd=cwd, env=SAFE_ENV, stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
     else:
-        proc = await asyncio.create_subprocess_exec(
+        return await asyncio.create_subprocess_exec(
             *argv, cwd=cwd, env=SAFE_ENV, stdin=asyncio.subprocess.PIPE,
             stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
+
+
+async def _proc(argv: list[str], *, cwd: str, timeout: int, shell: bool = False,
+                stdin: bytes | None = None) -> tuple[int, str]:
+    SPAWNING[0] += 1
     try:
-        out, _ = await asyncio.wait_for(proc.communicate(stdin), timeout=timeout)
+        proc = await _spawn(argv, cwd=cwd, shell=shell)
+    finally:
+        SPAWNING[0] -= 1
+    ACTIVE_SESSIONS.add(proc.pid)
+    try:
+        out = await asyncio.wait_for(_collect(proc, stdin), timeout=timeout)
     except (TimeoutError, asyncio.CancelledError) as exc:
         try:
             os.killpg(proc.pid, 9)
@@ -114,7 +129,29 @@ async def _proc(argv: list[str], *, cwd: str, timeout: int, shell: bool = False,
         if isinstance(exc, asyncio.CancelledError):
             raise
         return 124, f"[timed out after {timeout} s]"
+    finally:
+        ACTIVE_SESSIONS.discard(proc.pid)
     return proc.returncode or 0, out.decode("utf-8", "replace")
+
+
+async def _collect(proc: asyncio.subprocess.Process, stdin: bytes | None) -> bytes:
+    # Keep at most MAX_OUTPUT_BYTES; a command that prints more is stopped, so a flood cannot exhaust memory.
+    if stdin:
+        proc.stdin.write(stdin)
+        with contextlib.suppress(ConnectionError):
+            await proc.stdin.drain()
+    proc.stdin.close()
+    chunks, size = [], 0
+    while chunk := await proc.stdout.read(65536):
+        chunks.append(chunk)
+        size += len(chunk)
+        if size > MAX_OUTPUT_BYTES:
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(proc.pid, 9)
+            chunks.append(b"\n[output stopped at %d bytes]" % MAX_OUTPUT_BYTES)
+            break
+    await proc.wait()
+    return b"".join(chunks)
 
 
 async def _read(args: dict[str, Any], workdir: str) -> tuple[str, bool]:
@@ -123,16 +160,27 @@ async def _read(args: dict[str, Any], workdir: str) -> tuple[str, bool]:
         return f"not a file: {path}", True
     offset = max(int(args.get("offset") or 1), 1)
     limit = min(max(int(args.get("limit") or 400), 1), 2000)
-    lines = []
-    with path.open("r", encoding="utf-8", errors="replace") as handle:
-        for number, line in enumerate(handle, 1):
-            if number < offset:
-                continue
-            if number >= offset + limit:
-                lines.append(f"[more lines follow; continue with offset={number}]")
-                break
-            lines.append(f"{number:>6}\t{line.rstrip()}")
-    return "\n".join(lines) or "[empty]", False
+
+    def scan() -> list[str]:
+        lines = []
+        with path.open("r", encoding="utf-8", errors="replace") as handle:
+            number = 0
+            # readline with a size bound keeps one enormous line from filling memory.
+            while line := handle.readline(MAX_LINE_CHARS):
+                if not line.endswith("\n") and len(line) == MAX_LINE_CHARS:
+                    while (rest := handle.readline(MAX_LINE_CHARS)) and not rest.endswith("\n"):
+                        pass  # skip the rest of the over-long line in bounded pieces
+                    line += " [line truncated]"
+                number += 1
+                if number < offset:
+                    continue
+                if number >= offset + limit:
+                    lines.append(f"[more lines follow; continue with offset={number}]")
+                    break
+                lines.append(f"{number:>6}\t{line.rstrip()}")
+        return lines
+
+    return "\n".join(await asyncio.to_thread(scan)) or "[empty]", False
 
 
 async def _grep(args: dict[str, Any], workdir: str, timeout: int) -> tuple[str, bool]:
@@ -160,18 +208,30 @@ async def _grep(args: dict[str, Any], workdir: str, timeout: int) -> tuple[str, 
     return "\n".join(lines[:cap]) + tail, False
 
 
-async def _glob(args: dict[str, Any], workdir: str) -> tuple[str, bool]:
+async def _glob(args: dict[str, Any], workdir: str, timeout: int) -> tuple[str, bool]:
     base = _resolve(args.get("path"), workdir)
     cap = min(max(int(args.get("max_results") or 200), 1), 2000)
     pattern = str(args["pattern"])
-    found = []
-    for match in base.glob(pattern):
-        found.append(str(match))
-        if len(found) > cap:
-            break
-    if not found and "/" not in pattern:
-        found = [str(p) for p in base.rglob("*") if fnmatch.fnmatch(p.name, pattern)][: cap + 1]
+    if pattern.startswith("/"):
+        return "the pattern must be relative; pass the directory as path", True
+    # The walk runs in a thread with a time budget so a huge tree cannot stall every other call.
+    deadline = time.monotonic() + timeout
+
+    def walk() -> tuple[list[str], bool]:
+        found: list[str] = []
+        # A bare name pattern such as "*.md" searches the whole tree.
+        for match in base.rglob(pattern) if "/" not in pattern else base.glob(pattern):
+            if time.monotonic() > deadline:
+                return found, True
+            found.append(str(match))
+            if len(found) > cap:
+                break
+        return found, False
+
+    found, timed_out = await asyncio.to_thread(walk)
     more = f"\n[more than {cap} matches; narrow the pattern]" if len(found) > cap else ""
+    if timed_out:
+        more += f"\n[stopped after {timeout} s; narrow the pattern or path]"
     return ("\n".join(sorted(found[:cap])) or "no matches") + more, False
 
 
@@ -195,6 +255,11 @@ async def _declared(tool: DeclaredTool, args: dict[str, Any], workdir: str, pack
     argv = [part.replace("{package}", package_root) for part in tool.command]
     stdin = json.dumps(args).encode()
     if tool.input == "args":
+        # Only the declared parameters become flags, so the model cannot add flags of its own.
+        allowed = set((tool.parameters or {}).get("properties") or {})
+        unknown = sorted(k for k in args if k not in allowed)
+        if unknown:
+            return f"unknown arguments for {tool.name}: {', '.join(unknown)[:200]}", True
         argv += [f"--{key}={value}" for key, value in args.items()]
         stdin = b""
     code, out = await _proc(argv, cwd=workdir, timeout=tool.timeout_seconds or timeout, stdin=stdin)
@@ -209,7 +274,7 @@ async def run_sandbox_tool(name: str, args: dict[str, Any], *, workdir: str, tim
         if name == "grep":
             return await _grep(args, workdir, timeout)
         if name == "glob":
-            return await _glob(args, workdir)
+            return await _glob(args, workdir, timeout)
         if name == "list":
             return await _list(args, workdir)
         if name == "bash":
@@ -220,4 +285,6 @@ async def run_sandbox_tool(name: str, args: dict[str, Any], *, workdir: str, tim
         return f"invalid arguments for {name}: {type(exc).__name__}", True
     except OSError as exc:
         return f"{name} failed: {exc.strerror or type(exc).__name__}", True
+    except Exception:  # noqa: BLE001  any other failure becomes a generic tool error, never raw text
+        return f"{name} failed", True
     return f"unknown tool {name}", True

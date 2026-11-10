@@ -6,6 +6,7 @@ import asyncio
 
 import pytest
 
+from astralvessel import sandbox
 from astralvessel.client import decode, integral
 from astralvessel.manifest import load_package
 from astralvessel.primitives import validate_components
@@ -52,6 +53,10 @@ async def test_sandbox_tools_run_with_limits(package_dir):
     assert out == "no matches" and not err
     out, err = await runner.run("glob", {"pattern": "wiki/person-*.md"})
     assert "person-ada-lovelace.md" in out
+    out, err = await runner.run("glob", {"pattern": "*.md"})
+    assert "person-ada-lovelace.md" in out
+    out, err = await runner.run("glob", {"pattern": "/**/*.sqlite"})
+    assert err and "relative" in out
     out, err = await runner.run("list", {"path": "wiki"})
     assert out.strip() == "person-ada-lovelace.md"
     out, err = await runner.run("bash", {"command": "echo hi && exit 3"})
@@ -114,7 +119,7 @@ async def test_store_history_drops_reasoning_and_sweeps_idle(tmp_path):
                             [{"role": "assistant", "content": "a", "reasoning_content": "secret thoughts"}], [])
     assert "reasoning_content" not in (await store.history("alice", "c1"))[0]
     await asyncio.sleep(0.01)
-    assert await store.sweep(0) == 1
+    assert len(await store.sweep(0)) == 1
 
 
 def test_decoder_reads_vessel_events_and_answers():
@@ -129,3 +134,60 @@ def test_decoder_reads_vessel_events_and_answers():
     assert answer["text"] == "hello" and answer["components"][0]["type"] == "metric"
     assert answer["schema_version"] == "0.4.0"
     assert integral([1.0, 1.5, {"a": 2.0}]) == [1, 1.5, {"a": 2}]
+
+
+async def test_glob_stops_at_its_time_budget(package_dir):
+    from astralvessel.tools import run_sandbox_tool
+    out, err = await run_sandbox_tool("glob", {"pattern": "**/*"}, workdir=str(package_dir), timeout=0,
+                                      declared={}, package_root=str(package_dir))
+    assert not err and "stopped after 0 s" in out
+
+
+async def test_reaper_kills_strays_but_spares_running_calls(monkeypatch):
+    from astralvessel.tools import ACTIVE_SESSIONS
+    stray = await asyncio.create_subprocess_exec("sleep", "30", start_new_session=True)
+    running = await asyncio.create_subprocess_exec("sleep", "30", start_new_session=True)
+    ACTIVE_SESSIONS.add(running.pid)
+    try:
+        # Only these two children are visible, so the test can never touch another process.
+        monkeypatch.setattr(sandbox.os, "listdir", lambda _p: [str(stray.pid), str(running.pid), "self"])
+        sandbox.reap_strays()
+        assert running.returncode is None and stray.returncode is None  # not the container's init: no-op
+        monkeypatch.setattr(sandbox.os, "getpid", lambda: 1)
+        sandbox.reap_strays()
+        assert await asyncio.wait_for(stray.wait(), 5) == -9
+        await asyncio.sleep(0.1)
+        assert running.returncode is None
+    finally:
+        ACTIVE_SESSIONS.discard(running.pid)
+        running.kill()
+        await running.wait()
+
+
+async def test_tool_output_and_long_lines_are_bounded(package_dir):
+    from astralvessel.tools import MAX_OUTPUT_BYTES, run_sandbox_tool
+    out, err = await run_sandbox_tool("bash", {"command": "head -c 5000000 /dev/zero | tr '\\0' a"},
+                                      workdir=str(package_dir), timeout=20, declared={}, package_root="")
+    assert err and "[output stopped" in out and len(out) < MAX_OUTPUT_BYTES + 70_000
+    (package_dir / "long.txt").write_text("a" * 50_000 + "\nsecond\n")
+    out, err = await run_sandbox_tool("read", {"path": "long.txt"}, workdir=str(package_dir), timeout=5,
+                                      declared={}, package_root="")
+    assert not err and "[line truncated]" in out and "second" in out and len(out) < 5000
+
+
+async def test_declared_flag_tools_accept_only_declared_parameters(package_dir):
+    from astralvessel.manifest import DeclaredTool
+    from astralvessel.tools import run_sandbox_tool
+    tool = DeclaredTool(name="say", description="x", command=["echo"], input="args",
+                        parameters={"type": "object", "properties": {"word": {"type": "string"}}})
+    out, err = await run_sandbox_tool("say", {"word": "hi"}, workdir=str(package_dir), timeout=5,
+                                      declared={"say": tool}, package_root="")
+    assert not err and out == "--word=hi"
+    out, err = await run_sandbox_tool("say", {"word": "hi", "exec": "sh"}, workdir=str(package_dir), timeout=5,
+                                      declared={"say": tool}, package_root="")
+    assert err and "unknown arguments" in out and "exec" in out
+
+
+def test_sandbox_server_refuses_a_short_token(package_dir):
+    with pytest.raises(ValueError, match="16"):
+        sandbox.sandbox_app(str(package_dir), token="short")

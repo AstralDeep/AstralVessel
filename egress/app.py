@@ -89,6 +89,9 @@ class Forbidden(Exception):
 
 def _is_public_ip(ip: str) -> bool:
     addr = ipaddress.ip_address(ip)
+    # is_global also refuses shared address space (100.64.0.0/10, which Tailscale uses).
+    if not addr.is_global:
+        return False
     return not (addr.is_private or addr.is_loopback or addr.is_link_local or addr.is_multicast
                 or addr.is_reserved or addr.is_unspecified or getattr(addr, "is_site_local", False))
 

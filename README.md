@@ -41,7 +41,7 @@ the model key. The harness stores only a SHA-256 of the app's deployment key.
 ```bash
 cp deploy/.env.example deploy/.env      # fill in the model key, app key and its sha256, sandbox token, vault path
 cd deploy && docker compose up -d --build
-./verify-isolation.sh                    # 15 isolation probes from inside the containers
+./verify-isolation.sh                    # 18 isolation probes from inside the containers
 set -a; . ./.env; set +a
 docker compose run --rm --no-deps -T -v "$PWD/../conformance:/conformance:ro" demo \
   python /conformance/run.py http://vessel:8700 "$VESSEL_APP_KEY"   # 19 conformance checks
@@ -64,7 +64,8 @@ never point a model at it.
 
 Version 0.1, built 2026-11-09 to 10. Done: the harness, the sandbox and egress deployment, the A2A
 profile, owner binding, cancellation, primitives output rendered by AstralProjection, the nexus
-example, 28 tests, 15 isolation probes, 19 conformance checks. Not yet: InFocus-Agent on Vessel, MCP
-tool servers, a fresh sandbox per conversation, and running nexus's own end-to-end suite against it.
+example, 39 tests, 18 isolation probes, 19 conformance checks, and an adversarial pass (2026-11-09). Not yet: InFocus-Agent on Vessel, MCP
+tool servers, a fresh sandbox per conversation (until then, users share one sandbox's scratch space
+and process list), a cap on conversation history length, and running nexus's own end-to-end suite against it.
 
 Licensed under Apache 2.0, like the rest of Astral.
