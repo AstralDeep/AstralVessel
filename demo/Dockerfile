@@ -16,7 +16,8 @@ COPY astralvessel ./astralvessel
 RUN pip install --no-cache-dir .
 COPY demo ./demo
 
-RUN useradd --create-home --uid 1003 --shell /usr/sbin/nologin demo
+RUN useradd --create-home --uid 1003 --shell /usr/sbin/nologin demo \
+    && mkdir -p /data && chown demo:demo /data
 USER demo
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1
 EXPOSE 8790

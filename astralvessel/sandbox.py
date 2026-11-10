@@ -15,8 +15,11 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from . import confine as landlock
 from .manifest import AgentPackage, load_package
-from .tools import ACTIVE_SESSIONS, SPAWNING, run_sandbox_tool
+from .tools import ACTIVE_SESSIONS, SPAWNING, Confinement, run_sandbox_tool
+
+SCRATCH_ROOT = "/tmp/vessel-calls"
 
 
 class ToolRunner(Protocol):
@@ -25,16 +28,24 @@ class ToolRunner(Protocol):
     async def close(self) -> None: ...
 
 
+def confinement_for(package: AgentPackage, scratch_root: str = SCRATCH_ROOT) -> Confinement:
+    sandbox = package.manifest.sandbox
+    readable = (sandbox.workdir, str(package.root), *(m.target for m in sandbox.mounts))
+    return Confinement(readable=tuple(dict.fromkeys(readable)), scratch_root=scratch_root)
+
+
 class LocalRunner:
-    def __init__(self, package: AgentPackage):
+    def __init__(self, package: AgentPackage, confinement: Confinement | None = None):
         self.package = package
         self.declared = {t.name: t for t in package.declared}
+        self.confinement = confinement
 
     async def run(self, name: str, args: dict[str, Any]) -> tuple[str, bool]:
         sandbox = self.package.manifest.sandbox
         workdir = os.environ.get("VESSEL_WORKDIR") or sandbox.workdir
         return await run_sandbox_tool(name, args, workdir=workdir, timeout=sandbox.tool_timeout_seconds,
-                                      declared=self.declared, package_root=str(self.package.root))
+                                      declared=self.declared, package_root=str(self.package.root),
+                                      confinement=self.confinement)
 
     async def close(self) -> None:
         return None
@@ -44,6 +55,13 @@ class RemoteRunner:
     def __init__(self, url: str, token: str, timeout: int):
         self._client = httpx.AsyncClient(base_url=url.rstrip("/"), headers={"Authorization": f"Bearer {token}"},
                                          timeout=httpx.Timeout(timeout + 15, connect=10))
+
+    async def health(self) -> dict[str, Any] | None:
+        try:
+            response = await self._client.get("/health", timeout=5)
+        except httpx.HTTPError:
+            return None
+        return response.json() if response.status_code == 200 else None
 
     async def run(self, name: str, args: dict[str, Any]) -> tuple[str, bool]:
         try:
@@ -76,12 +94,24 @@ def reap_strays() -> None:
             pass
 
 
-def sandbox_app(package_path: str | None = None, token: str | None = None) -> Starlette:
+def sandbox_app(package_path: str | None = None, token: str | None = None, *, confine: bool | None = None,
+                scratch_root: str = SCRATCH_ROOT) -> Starlette:
     package = load_package(package_path or os.environ["VESSEL_PACKAGE"])
     secret = token or os.environ["VESSEL_SANDBOX_TOKEN"]
     if len(secret) < 16:
         raise ValueError("VESSEL_SANDBOX_TOKEN must be at least 16 characters")
-    runner = LocalRunner(package)
+    if confine is None:
+        confine = os.environ.get("VESSEL_UNCONFINED") != "1"
+    confinement = None
+    if confine:
+        # Without Landlock, concurrent calls for different users could see each other; refuse to start.
+        if landlock.abi_version() < landlock.REQUIRED_ABI:
+            raise SystemExit(f"this kernel lacks Landlock ABI {landlock.REQUIRED_ABI}; per-call isolation is "
+                             "unavailable (set VESSEL_UNCONFINED=1 only for development)")
+        os.makedirs(scratch_root, mode=0o711, exist_ok=True)
+        confinement = confinement_for(package, scratch_root)
+    runner = LocalRunner(package, confinement)
+    profile = os.environ.get("VESSEL_PROFILE_HASH", "")
 
     async def run(request: Request) -> JSONResponse:
         supplied = request.headers.get("authorization", "").removeprefix("Bearer ")
@@ -105,6 +135,7 @@ def sandbox_app(package_path: str | None = None, token: str | None = None) -> St
         return JSONResponse({"output": output, "error": error})
 
     async def health(_request: Request) -> JSONResponse:
-        return JSONResponse({"ok": True})
+        return JSONResponse({"ok": True, "agent": package.manifest.agent.name, "profile": profile,
+                             "confined": confinement is not None})
 
     return Starlette(routes=[Route("/run", run, methods=["POST"]), Route("/health", health)])

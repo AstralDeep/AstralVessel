@@ -19,11 +19,13 @@ from .model import ModelClient, ModelError, StepResult
 from .primitives import PRESENT_DESCRIPTION, PRESENT_PARAMETERS, validate_components
 from .sandbox import ToolRunner
 from .tools import BUILTIN_SCHEMAS, WEB_TOOLS, clip, tool_spec
+from .transcript import for_model
 from .web import webfetch, websearch
 
 log = logging.getLogger("astralvessel")
 
 Emit = Callable[[dict[str, Any]], Awaitable[None]]
+OnMessage = Callable[[dict[str, Any]], Awaitable[None]]
 EVENT_OUTPUT_CHARS = 4000
 STEP_LIMIT_NOTE = ("You have reached the step limit for this turn. Do not call any more tools. "
                    "Answer now with what you have found, and say what you could not check.")
@@ -57,8 +59,11 @@ def system_prompt(package: AgentPackage) -> str:
 
 
 class Turn:
-    def __init__(self, package: AgentPackage, model: ModelClient, runner: ToolRunner, emit: Emit):
+    def __init__(self, package: AgentPackage, model: ModelClient, runner: ToolRunner, emit: Emit,
+                 on_message: OnMessage | None = None):
         self.package = package
+        self.on_message = on_message
+        self._sent = 0
         self.model = model
         self.runner = runner
         self.emit = emit
@@ -92,6 +97,7 @@ class Turn:
         self._close_dangling_calls()
         if self.new_messages[-1]["role"] != "assistant":
             self.new_messages.append({"role": "assistant", "content": f"[this turn ended early: {status}]"})
+        await self._flush()
         result = {
             "status": status,
             "text": self.answer,
@@ -107,7 +113,8 @@ class Turn:
 
     async def _loop(self, history: list[dict[str, Any]]) -> str:
         specs = tool_specs(self.package)
-        base = [{"role": "system", "content": system_prompt(self.package)}, *history]
+        send_reasoning = self.package.manifest.model.send_reasoning
+        base = [{"role": "system", "content": system_prompt(self.package)}, *for_model(history, send_reasoning)]
         limit = self.package.manifest.model.max_steps
         while True:
             over_limit = self.steps >= limit
@@ -117,7 +124,10 @@ class Turn:
             step = await self._step(messages, [] if over_limit else specs)
             if not step.tool_calls or over_limit:
                 self.answer = step.text.strip()
-                self.new_messages.append({"role": "assistant", "content": step.text})
+                final: dict[str, Any] = {"role": "assistant", "content": step.text}
+                if step.reasoning:
+                    final["reasoning_content"] = step.reasoning
+                self.new_messages.append(final)
                 return ev.STATUS_STEP_LIMIT if over_limit else ev.STATUS_OK
             assistant: dict[str, Any] = {
                 "role": "assistant",
@@ -131,6 +141,19 @@ class Turn:
             for call in step.tool_calls:
                 output = await self._call_tool(call.id, call.name, call.arguments)
                 self.new_messages.append({"role": "tool", "tool_call_id": call.id, "content": output})
+            await self._flush()
+
+    async def _flush(self) -> None:
+        # Hand each completed message to the caller once, in order, so a dropped stream still leaves a usable prefix.
+        if self.on_message is None:
+            return
+        while self._sent < len(self.new_messages):
+            message = self.new_messages[self._sent]
+            self._sent += 1
+            try:
+                await self.on_message(message)
+            except Exception:  # noqa: BLE001  a failed delivery must not end the turn
+                log.warning("transcript delivery failed", exc_info=True)
 
     async def _step(self, messages: list[dict[str, Any]], specs: list[dict[str, Any]]) -> StepResult:
         self.steps += 1

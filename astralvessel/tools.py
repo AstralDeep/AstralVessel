@@ -8,10 +8,14 @@ import contextlib
 import json
 import os
 import shutil
+import sys
+import tempfile
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from . import confine as landlock
 from .manifest import DeclaredTool
 
 SANDBOX_TOOLS = ("read", "grep", "glob", "list", "bash")
@@ -23,6 +27,17 @@ ACTIVE_SESSIONS: set[int] = set()
 SPAWNING = [0]
 MAX_OUTPUT_BYTES = 1_000_000
 MAX_LINE_CHARS = 4000
+
+
+@dataclass(frozen=True)
+class Confinement:
+    # Each call gets a fresh scratch directory under scratch_root and may read only these roots (plus the system).
+    readable: tuple[str, ...]
+    scratch_root: str
+
+    def allows(self, path: Path) -> bool:
+        real = os.path.realpath(path)
+        return any(real == r or real.startswith(r.rstrip("/") + "/") for r in map(os.path.realpath, self.readable))
 
 BUILTIN_SCHEMAS: dict[str, dict[str, Any]] = {
     "read": {
@@ -99,22 +114,34 @@ def _resolve(path: str | None, workdir: str) -> Path:
     return candidate if candidate.is_absolute() else base / candidate
 
 
-async def _spawn(argv: list[str], *, cwd: str, shell: bool) -> asyncio.subprocess.Process:
-    if shell:
-        return await asyncio.create_subprocess_shell(
-            argv[0], cwd=cwd, env=SAFE_ENV, stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
-    else:
-        return await asyncio.create_subprocess_exec(
-            *argv, cwd=cwd, env=SAFE_ENV, stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
+async def _spawn(argv: list[str], *, cwd: str, env: dict[str, str]) -> asyncio.subprocess.Process:
+    return await asyncio.create_subprocess_exec(
+        *argv, cwd=cwd, env=env, stdin=asyncio.subprocess.PIPE,
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT, start_new_session=True)
 
 
 async def _proc(argv: list[str], *, cwd: str, timeout: int, shell: bool = False,
-                stdin: bytes | None = None) -> tuple[int, str]:
+                stdin: bytes | None = None, confinement: Confinement | None = None) -> tuple[int, str]:
+    if shell:
+        argv = ["/bin/sh", "-c", argv[0]]
+    env, scratch = SAFE_ENV, None
+    if confinement is not None:
+        scratch = tempfile.mkdtemp(prefix="call-", dir=confinement.scratch_root)
+        env = {**SAFE_ENV, "HOME": scratch, "TMPDIR": scratch}
+        flags = [f for root in confinement.readable for f in ("--read", root)]
+        argv = [sys.executable, "-I", "-S", landlock.__file__, "--scratch", scratch, *flags, "--", *argv]
+    try:
+        return await _supervise(argv, cwd=cwd, env=env, timeout=timeout, stdin=stdin)
+    finally:
+        if scratch:
+            shutil.rmtree(scratch, ignore_errors=True)
+
+
+async def _supervise(argv: list[str], *, cwd: str, env: dict[str, str], timeout: int,
+                     stdin: bytes | None) -> tuple[int, str]:
     SPAWNING[0] += 1
     try:
-        proc = await _spawn(argv, cwd=cwd, shell=shell)
+        proc = await _spawn(argv, cwd=cwd, env=env)
     finally:
         SPAWNING[0] -= 1
     ACTIVE_SESSIONS.add(proc.pid)
@@ -183,7 +210,8 @@ async def _read(args: dict[str, Any], workdir: str) -> tuple[str, bool]:
     return "\n".join(await asyncio.to_thread(scan)) or "[empty]", False
 
 
-async def _grep(args: dict[str, Any], workdir: str, timeout: int) -> tuple[str, bool]:
+async def _grep(args: dict[str, Any], workdir: str, timeout: int,
+                confinement: Confinement | None) -> tuple[str, bool]:
     target = str(_resolve(args.get("path"), workdir))
     cap = min(max(int(args.get("max_results") or 100), 1), 1000)
     if shutil.which("rg"):
@@ -198,7 +226,7 @@ async def _grep(args: dict[str, Any], workdir: str, timeout: int) -> tuple[str, 
         if args.get("glob"):
             argv.append(f"--include={args['glob']}")
         argv += ["--", str(args["pattern"]), target]
-    code, out = await _proc(argv, cwd=workdir, timeout=timeout)
+    code, out = await _proc(argv, cwd=workdir, timeout=timeout, confinement=confinement)
     if code == 1 and not out.strip():
         return "no matches", False
     if code not in (0, 1):
@@ -245,13 +273,15 @@ async def _list(args: dict[str, Any], workdir: str) -> tuple[str, bool]:
     return "\n".join(shown) + more or "[empty directory]", False
 
 
-async def _bash(args: dict[str, Any], workdir: str, timeout: int) -> tuple[str, bool]:
-    code, out = await _proc([str(args["command"])], cwd=workdir, timeout=timeout, shell=True)
+async def _bash(args: dict[str, Any], workdir: str, timeout: int,
+                confinement: Confinement | None) -> tuple[str, bool]:
+    code, out = await _proc([str(args["command"])], cwd=workdir, timeout=timeout, shell=True,
+                            confinement=confinement)
     return f"{out.rstrip()}\n[exit code {code}]".lstrip(), code != 0
 
 
 async def _declared(tool: DeclaredTool, args: dict[str, Any], workdir: str, package_root: str,
-                    timeout: int) -> tuple[str, bool]:
+                    timeout: int, confinement: Confinement | None) -> tuple[str, bool]:
     argv = [part.replace("{package}", package_root) for part in tool.command]
     stdin = json.dumps(args).encode()
     if tool.input == "args":
@@ -262,25 +292,32 @@ async def _declared(tool: DeclaredTool, args: dict[str, Any], workdir: str, pack
             return f"unknown arguments for {tool.name}: {', '.join(unknown)[:200]}", True
         argv += [f"--{key}={value}" for key, value in args.items()]
         stdin = b""
-    code, out = await _proc(argv, cwd=workdir, timeout=tool.timeout_seconds or timeout, stdin=stdin)
+    code, out = await _proc(argv, cwd=workdir, timeout=tool.timeout_seconds or timeout, stdin=stdin,
+                            confinement=confinement)
     return out.rstrip() or f"[exit code {code}]", code != 0
 
 
 async def run_sandbox_tool(name: str, args: dict[str, Any], *, workdir: str, timeout: int,
-                           declared: dict[str, DeclaredTool], package_root: str) -> tuple[str, bool]:
+                           declared: dict[str, DeclaredTool], package_root: str,
+                           confinement: Confinement | None = None) -> tuple[str, bool]:
     try:
+        if name in ("read", "glob", "list") and confinement is not None:
+            # These run inside the sandbox server itself, so they get the same path limits a confined call has.
+            target = _resolve(args.get("path"), workdir)
+            if not confinement.allows(target):
+                return f"{name}: {target} is outside the agent's data", True
         if name == "read":
             return await _read(args, workdir)
         if name == "grep":
-            return await _grep(args, workdir, timeout)
+            return await _grep(args, workdir, timeout, confinement)
         if name == "glob":
             return await _glob(args, workdir, timeout)
         if name == "list":
             return await _list(args, workdir)
         if name == "bash":
-            return await _bash(args, workdir, timeout)
+            return await _bash(args, workdir, timeout, confinement)
         if name in declared:
-            return await _declared(declared[name], args, workdir, package_root, timeout)
+            return await _declared(declared[name], args, workdir, package_root, timeout, confinement)
     except (KeyError, ValueError, TypeError) as exc:
         return f"invalid arguments for {name}: {type(exc).__name__}", True
     except OSError as exc:

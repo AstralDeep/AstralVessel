@@ -1,4 +1,4 @@
-# Unit tests for the manifest loader, tools, primitives validation, the store's owner binding, and the A2A decoder.
+# Unit tests for the manifest loader, tools, primitives validation, the app-side history store, and the A2A decoder.
 
 from __future__ import annotations
 
@@ -8,10 +8,10 @@ import pytest
 
 from astralvessel import sandbox
 from astralvessel.client import decode, integral
+from astralvessel.history import HistoryStore as Store
 from astralvessel.manifest import load_package
 from astralvessel.primitives import validate_components
 from astralvessel.sandbox import LocalRunner
-from astralvessel.store import Store
 from astralvessel.tools import clip
 
 
@@ -112,12 +112,12 @@ async def test_store_binds_every_conversation_to_its_owner(tmp_path):
     assert await store.get("alice", "c1") is None
 
 
-async def test_store_history_drops_reasoning_and_sweeps_idle(tmp_path):
+async def test_store_history_keeps_the_transcript_and_sweeps_idle(tmp_path):
     store = Store(tmp_path / "s.sqlite")
     await store.claim("alice", "c1", "q")
     await store.record_turn("alice", "c1", "t1", "q", {"status": "ok"},
-                            [{"role": "assistant", "content": "a", "reasoning_content": "secret thoughts"}], [])
-    assert "reasoning_content" not in (await store.history("alice", "c1"))[0]
+                            [{"role": "assistant", "content": "a", "reasoning_content": "thoughts"}], [])
+    assert (await store.history("alice", "c1"))[0]["reasoning_content"] == "thoughts"
     await asyncio.sleep(0.01)
     assert len(await store.sweep(0)) == 1
 
@@ -134,6 +134,11 @@ def test_decoder_reads_vessel_events_and_answers():
     assert answer["text"] == "hello" and answer["components"][0]["type"] == "metric"
     assert answer["schema_version"] == "0.4.0"
     assert integral([1.0, 1.5, {"a": 2.0}]) == [1, 1.5, {"a": 2}]
+    chunk = decode({"result": {"artifactUpdate": {"lastChunk": True, "artifact": {"name": "transcript", "parts": [
+        {"data": {"version": 1.0, "messages": [{"role": "user", "content": "q"}], "turn": {"steps": 2.0}},
+         "mediaType": "application/vnd.astralvessel.transcript+json"}]}}}})[0]
+    assert chunk["type"] == "transcript" and chunk["messages"][0]["content"] == "q"
+    assert chunk["last"] and chunk["turn"]["steps"] == 2
 
 
 async def test_glob_stops_at_its_time_budget(package_dir):
