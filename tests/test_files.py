@@ -145,7 +145,7 @@ class FileRunner(sandbox.LocalRunner):
         super().__init__(package)
         self.count = count
 
-    async def run(self, name, args, workspace=None):
+    async def run(self, name, args, workspace=None, owner=""):
         return "made", False
 
     def take_files(self, workspace):
@@ -206,7 +206,7 @@ async def test_the_model_sees_attached_files_even_when_the_output_is_clipped(pac
     package = load_package(package_dir)
     runner = FileRunner(package, 1)
 
-    async def flood(name, args, workspace=None):
+    async def flood(name, args, workspace=None, owner=""):
         return "x" * (package.manifest.sandbox.tool_output_chars * 2), False
 
     runner.run = flood
