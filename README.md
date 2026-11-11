@@ -80,6 +80,12 @@ agent declares what it needs; the deployment file is the only place access is gr
   headers.
 - **The egress** is the only way out. It adds the model key, so the harness never holds it. Its
   web proxy reaches only globally routable addresses on ports 80 and 443.
+- **Web search** runs on a SearXNG container the deployment starts beside the egress: no account or
+  key, several engines at once so one engine's CAPTCHA or rate limit leaves the others answering, and
+  all of its traffic through the egress. Only the vessel can reach it. A failed or refused search
+  reaches the model as an error, never as "no results". `[search] provider = "duckduckgo"` in
+  `deployment.toml` scrapes DuckDuckGo instead, with no extra container, but DuckDuckGo challenges
+  repeated queries.
 
 Nothing in the running system controls Docker. `astralvessel deploy` turns `deployment.toml` into a
 Compose file, the operator starts it, and the vessel serves an agent only once its sandbox reports that
@@ -201,6 +207,7 @@ Version 0.4, November 2026. Done:
 - verified-token callers (issuer allowlist, audience, owners keyed by issuer and subject), per-call
   scope narrowing, and structured skill calls in the shape AstralDeep sends
 - fetched web content fenced and labeled as untrusted before the model reads it
+- web search through a private SearXNG container, with failures reported as errors
 - a task store that survives restarts, owner binding, cancellation, and AstralPrimitives output
 - unit and service tests, isolation probes, conformance checks, a load test, and an independent
   security review

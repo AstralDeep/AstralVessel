@@ -81,6 +81,10 @@ def test_compose_isolates_each_sandbox_and_keeps_secrets_out(data_package, tmp_p
     assert vessel["environment"]["WEB_KEY_SHA256"].startswith("${WEB_KEY_SHA256:?")
     assert "tools-guide" in vessel["networks"] and "outside" not in vessel["networks"]
     assert spec["services"]["egress"]["networks"] == ["egress", "outside"]
+    search = spec["services"]["search"]
+    assert search["networks"] == ["egress"] and "ports" not in search and search["read_only"]
+    assert search["cap_drop"] == ["ALL"] and vessel["environment"]["VESSEL_SEARCH_URL"] == "http://search:8080"
+    assert "search" in vessel["depends_on"]
     shared = 'mounts = [{ target = "/data", source = "volume:shared-corpus" }]'
     path.write_text(deployment_text(data_package, mounts=shared))
     named = generate(load_deployment(path), repo_root=None)
@@ -93,6 +97,15 @@ def test_compose_isolates_each_sandbox_and_keeps_secrets_out(data_package, tmp_p
     secret = tmp_path / ".generated" / "sandbox-guide.env"
     assert stat.S_IMODE(os.stat(secret).st_mode) == 0o600
     assert sandbox_token(master, "guide") in secret.read_text()
+    key = tmp_path / ".generated" / "search.env"
+    assert stat.S_IMODE(os.stat(key).st_mode) == 0o600 and key.read_text().startswith("SEARXNG_SECRET=")
+    first = key.read_text()
+    write(deployment, out, repo_root=None, master_token=master)
+    assert key.read_text() == first and first.split("=")[1].strip() not in out.read_text()
+    assert "http://egress:3128" in (tmp_path / ".generated" / "searxng.yml").read_text()
+    path.write_text('[search]\nprovider = "duckduckgo"\n' + deployment_text(data_package))
+    plain = generate(load_deployment(path), repo_root=None)
+    assert "search" not in plain["services"] and "VESSEL_SEARCH_URL" not in plain["services"]["vessel"]["environment"]
 
 
 def test_history_must_be_well_formed_and_never_system():
