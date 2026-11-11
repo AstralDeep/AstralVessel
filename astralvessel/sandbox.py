@@ -221,16 +221,24 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
                              "output": f"[stopped: the files went over {limit} disk limit, so this turn's "
                                        "workspace was emptied; write less, or delete files you no longer need]"})
 
+    removing: dict[str, asyncio.Event] = {}  # turns whose workspace is being emptied; new calls wait
+
     async def stop_over_limit(workspace: str, limit: str) -> JSONResponse:
-        # Stop every call of the turn, not only this one, before emptying the workspace under them.
+        # Stop every call of the turn, not only this one, and hold new ones back, so no process of the turn is
+        # alive while its workspace is removed.
         stopped[workspace] = limit
-        tasks = running.get(workspace, set()) - {asyncio.current_task()}
-        for task in tasks:
-            task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-        runner.files.pop(workspace, None)
-        measured.pop(workspace, None)
-        await asyncio.to_thread(end_workspace, confinement, workspace)
+        gate = removing.setdefault(workspace, asyncio.Event())
+        try:
+            tasks = set(running.get(workspace, set()))
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
+            runner.files.pop(workspace, None)
+            measured.pop(workspace, None)
+            await asyncio.to_thread(end_workspace, confinement, workspace)
+        finally:
+            removing.pop(workspace, None)
+            gate.set()
         return stop_note(limit)
 
     def authorized(request: Request) -> bool:
@@ -272,6 +280,11 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
             stopped.pop(key, None)
         await asyncio.to_thread(sweep_workspaces, confinement, set(started))
         reap_strays()
+        # Check again with no await before the call starts: the turn may have ended or begun emptying meanwhile.
+        while workspace in removing:
+            await removing[workspace].wait()
+        if workspace in ended:
+            return JSONResponse({"error": True, "output": "this turn has ended"}, status_code=410)
         task = asyncio.create_task(runner.run(name, args, workspace))
         if workspace:
             running.setdefault(workspace, set()).add(task)

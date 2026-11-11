@@ -183,3 +183,29 @@ async def test_a_call_cannot_leave_its_session_and_nothing_it_starts_outlives_it
             return False
     assert not any(sleeping(p) for p in os.listdir("/proc") if p.isdigit())
     await runner.end_turn("c" * 32)
+
+
+@landlock
+async def test_no_call_of_a_turn_starts_while_its_workspace_is_being_emptied(package_dir, tmp_path, monkeypatch):
+    import asyncio
+    import threading
+    import time
+    removing, removed_at = threading.Event(), []
+    original = sandbox.end_workspace
+
+    def slow_end(confinement, workspace):
+        removing.set()
+        time.sleep(0.5)
+        original(confinement, workspace)
+        removed_at.append(time.time())
+
+    monkeypatch.setattr(sandbox, "end_workspace", slow_end)
+    client, _ = disk_app(package_dir, tmp_path, monkeypatch, turn=1024 * 1024, user=4 * 1024 * 1024)
+    async with client:
+        first = asyncio.create_task(client.post("/run", json=write(1500, "c" * 32, ALICE), headers=AUTH))
+        await asyncio.to_thread(removing.wait, 10)
+        clock = {"name": "bash", "args": {"command": "python3 -c 'import time; print(time.time())'"},
+                 "workspace": "c" * 32, "owner": ALICE}
+        second = (await client.post("/run", json=clock, headers=AUTH)).json()
+        assert "disk limit" in (await first).json()["output"]
+        assert float(second["output"].split()[0]) >= removed_at[0]
