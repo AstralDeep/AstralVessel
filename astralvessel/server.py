@@ -600,15 +600,19 @@ def create_app(settings: Settings | None = None, runners: dict[str, ToolRunner] 
         while True:
             for runtime in runtimes.values():
                 if isinstance(runtime.runner, RemoteRunner):
-                    health = await runtime.runner.health()
+                    # The sandbox must run the deployed profile and have loaded the same tools this vessel serves
+                    # (it may have restarted on edited files). One failing check must not stop the others.
+                    why = ""
                     try:
-                        expected = runtime.agent.fingerprint  # reads the sandbox Dockerfile's inputs, if any
-                    except Exception as exc:  # one unreadable file must not stop the checks for every agent
-                        log.warning("agent %s fingerprint unreadable (%s)", runtime.agent.id, type(exc).__name__)
-                        expected = None
-                    ready = bool(health and expected and health.get("profile") == expected and health.get("confined"))
+                        health = await runtime.runner.health()
+                        ready = bool(health and health.get("profile") == runtime.agent.fingerprint
+                                     and health.get("loaded") == runtime.agent.package.loaded_digest()
+                                     and health.get("confined"))
+                    except Exception as exc:
+                        ready, why = False, f" ({type(exc).__name__})"
                     if ready != runtime.available:
-                        log.warning("agent %s sandbox is %s", runtime.agent.id, "ready" if ready else "NOT ready")
+                        log.warning("agent %s sandbox is %s%s", runtime.agent.id, "ready" if ready else "NOT ready",
+                                    why)
                     runtime.available = ready
             await asyncio.sleep(60 if all(r.available for r in runtimes.values()) else 5)
 

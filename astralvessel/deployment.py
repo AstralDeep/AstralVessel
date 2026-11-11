@@ -166,10 +166,8 @@ class Agent(BaseModel):
         sandbox = self.package.manifest.sandbox.model_dump()
         dockerfile = self.package.manifest.sandbox.dockerfile
         image = build_inputs_hash(self.package.root, dockerfile) if dockerfile else None
-        loaded = {"manifest": self.package.manifest.model_dump(mode="json"),
-                  "declared": [tool.model_dump(mode="json") for tool in self.package.declared]}
         body = {"id": self.id, "profile": self.profile.model_dump(), "needs": sandbox, "image": image,
-                "loaded": loaded, "schema": 2}
+                "loaded": self.package.loaded_digest(), "schema": 2}
         return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:16]
 
 

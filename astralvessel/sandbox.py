@@ -136,6 +136,6 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
 
     async def health(_request: Request) -> JSONResponse:
         return JSONResponse({"ok": True, "agent": package.manifest.agent.name, "profile": profile,
-                             "confined": confinement is not None})
+                             "loaded": package.loaded_digest(), "confined": confinement is not None})
 
     return Starlette(routes=[Route("/run", run, methods=["POST"]), Route("/health", health)])

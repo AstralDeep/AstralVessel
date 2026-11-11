@@ -250,12 +250,15 @@ async def test_only_a_sandbox_with_the_expected_profile_is_served(deployment_fil
     settings = settings_for(deployment_file, tmp_path)
 
     class Sandbox(RemoteRunner):
-        def __init__(self, profile, confined=True):
+        def __init__(self, profile, confined=True, loaded=None):
             super().__init__("http://sandbox.test", "x" * 16, 5)
             self.profile, self.confined = profile, confined
+            self.loaded = loaded or settings.deployment.agents["tester"].package.loaded_digest()
 
         async def health(self):
-            return {"ok": True, "profile": self.profile, "confined": self.confined}
+            if self.profile == "garbled":
+                return ["not", "a", "health", "object"]
+            return {"ok": True, "profile": self.profile, "confined": self.confined, "loaded": self.loaded}
 
     good = settings.deployment.agents["tester"].fingerprint
     app = create_app(settings, runners={"tester": Sandbox(good), "second": Sandbox("stale")},
@@ -269,7 +272,14 @@ async def test_only_a_sandbox_with_the_expected_profile_is_served(deployment_fil
         await asyncio.sleep(0.1)
         client = VesselClient("http://vessel.test", APP_KEY, transport=httpx.ASGITransport(app=app))
         assert (await client.agents("alice"))[0]["available"] is False
-    # An unreadable fingerprint input marks only that agent unavailable; the others are still checked.
+    # A sandbox that restarted on edited tool files reports what it loaded, and is not served.
+    app = create_app(settings, runners={"tester": Sandbox(good, loaded="edited-tools")},
+                     model_transport=model.transport())
+    async with app.router.lifespan_context(app):
+        await asyncio.sleep(0.1)
+        client = VesselClient("http://vessel.test", APP_KEY, transport=httpx.ASGITransport(app=app))
+        assert (await client.agents("alice"))[0]["available"] is False
+    # An unreadable fingerprint input or a garbled health reply marks only that agent unavailable.
     tester = settings.deployment.agents["tester"]
     original = type(tester).fingerprint
 
@@ -279,8 +289,16 @@ async def test_only_a_sandbox_with_the_expected_profile_is_served(deployment_fil
         return original.fget(agent)
 
     monkeypatch.setattr(type(tester), "fingerprint", property(unreadable))
-    second = settings.deployment.agents["second"].fingerprint
-    app = create_app(settings, runners={"tester": Sandbox(good), "second": Sandbox(second)},
+    second = settings.deployment.agents["second"]
+    third = Sandbox(second.fingerprint, loaded=second.package.loaded_digest())
+    app = create_app(settings, runners={"tester": Sandbox(good), "second": third},
+                     model_transport=model.transport())
+    async with app.router.lifespan_context(app):
+        await asyncio.sleep(0.1)
+        ops = VesselClient("http://vessel.test", OPS_KEY, transport=httpx.ASGITransport(app=app))
+        assert {a["id"]: a["available"] for a in await ops.agents("alice")} == {"tester": False, "second": True}
+    monkeypatch.undo()
+    app = create_app(settings, runners={"tester": Sandbox("garbled"), "second": third},
                      model_transport=model.transport())
     async with app.router.lifespan_context(app):
         await asyncio.sleep(0.1)
