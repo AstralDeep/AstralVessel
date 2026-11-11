@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import secrets as tokens
@@ -150,6 +151,8 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
         "volumes": vessel_volumes,
         "tmpfs": ["/tmp:size=64m,noexec,nosuid,nodev,mode=1777"],
         "networks": vessel_networks,
+        # The vessel reads the deployment file and every package at start, so a change to either must recreate it.
+        "labels": {"astralvessel.inputs": inputs_hash(deployment)},
         "mem_limit": "1g", "pids_limit": 256,
         "depends_on": ["egress", *(["search"] if "search" in services else []),
                        *(f"sandbox-{a}" for a in deployment.agents)],
@@ -160,6 +163,12 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
             if mount.source.startswith("volume:"):
                 volumes[mount.source[7:]] = {"external": True}
     return {"name": "astralvessel", "services": services, "networks": networks, "volumes": volumes}
+
+
+def inputs_hash(deployment: Deployment) -> str:
+    body = {"deployment": hashlib.sha256(deployment.path.read_bytes()).hexdigest(),
+            "agents": {agent_id: agent.fingerprint for agent_id, agent in deployment.agents.items()}}
+    return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:16]
 
 
 def write(deployment: Deployment, out: Path, *, repo_root: Path | None, master_token: str) -> list[Path]:

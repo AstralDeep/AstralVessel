@@ -67,6 +67,32 @@ def test_the_fingerprint_follows_the_sandbox_profile(data_package, tmp_path):
     assert sandbox_token("m" * 16, "a") != sandbox_token("m" * 16, "b")
 
 
+def test_an_edited_package_or_deployment_recreates_what_loads_it(data_package, tmp_path):
+    path = tmp_path / "deployment.toml"
+    path.write_text(deployment_text(data_package))
+
+    def services():
+        spec = generate(load_deployment(path), repo_root=None)["services"]
+        sandbox = spec["sandbox-guide"]["environment"]["VESSEL_PROFILE_HASH"]
+        return spec["vessel"]["labels"]["astralvessel.inputs"], sandbox
+
+    first = services()
+    assert services() == first
+    (data_package / "__pycache__").mkdir()
+    (data_package / "__pycache__" / "x.pyc").write_bytes(b"cache")
+    assert services() == first
+    prompt = data_package / "prompt.md"
+    prompt.write_text(prompt.read_text() + ".")
+    edited = services()
+    assert edited[0] != first[0] and edited[1] != first[1]
+    (data_package / "tools" / "new.toml").write_text("# a new declared tool file\n")
+    added = services()
+    assert added[0] != edited[0] and added[1] != edited[1]
+    path.write_text(path.read_text() + "\n# comment\n")
+    redeployed = services()
+    assert redeployed[0] != added[0] and redeployed[1] == added[1]
+
+
 def test_compose_isolates_each_sandbox_and_keeps_secrets_out(data_package, tmp_path):
     path = tmp_path / "deployment.toml"
     path.write_text(deployment_text(data_package))
