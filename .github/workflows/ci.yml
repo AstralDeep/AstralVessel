@@ -47,7 +47,7 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends ripgrep
-      - run: pip install -e . pytest==9.2.0 pytest-asyncio==1.4.1.post1 "$ASTRALPRIMS"
+      - run: pip install -e . pytest==9.2.0 pytest-asyncio==1.4.1.post1 "$ASTRALPRIMS" -r egress/requirements.txt
       - run: python -m pytest -q -rs
 
   isolation:

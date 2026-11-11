@@ -79,7 +79,8 @@ agent declares what it needs; the deployment file is the only place access is gr
   access or a secret. The application learns which app, user and agent asked through `X-Vessel-*`
   headers.
 - **The egress** is the only way out. It adds the model key, so the harness never holds it, and
-  forwards model calls only for the vessel, which holds a token derived at deploy time. Its
+  forwards model calls only for the vessel, which holds a token derived at deploy time (so an agent's
+  model `api_key` stays `env:VESSEL_MODEL_KEY`, the default). Its
   web proxy reaches only globally routable addresses on ports 80 and 443.
 - **Web search** runs on a SearXNG container the deployment starts beside the egress: no account or
   key, several engines at once so one engine's CAPTCHA or rate limit leaves the others answering, and
