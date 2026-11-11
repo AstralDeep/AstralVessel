@@ -39,9 +39,10 @@ def test_the_outbox_keeps_only_allowed_valid_files_and_is_emptied(tmp_path):
     (box / "link.csv").symlink_to(tmp_path / "secret")
     (tmp_path / "secret").write_text("secret")
     (box / "folder.csv").mkdir()
+    os.mkfifo(box / "pipe.csv")
     found, notes = outputs.collect(str(box), ["png", "csv"])
     assert [(f.name, f.media_type) for f in found] == [("chart.png", "image/png"), ("table.csv", "text/csv")]
-    assert found[0].data == PNG and len(notes) == 7 and os.listdir(box) == []
+    assert found[0].data == PNG and len(notes) == 8 and os.listdir(box) == []
     text = "\n".join(notes)
     assert "fake.png: not a valid .png" in text and "drawing.svg: this agent may not" in text
     assert "big.csv: larger than 4 MB" in text and "link.csv: not a regular" in text and "secret" not in text[-60:]

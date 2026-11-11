@@ -84,9 +84,13 @@ def collect(outbox: str, allowed: list[str]) -> tuple[list[ToolFile], list[str]]
             elif len(files) >= MAX_FILES_PER_CALL:
                 reason = f"at most {MAX_FILES_PER_CALL} files per call"
             else:
-                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+                # A process the call left running could swap the file for a FIFO or link after the lstat.
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
                 with os.fdopen(fd, "rb") as handle:
-                    data = handle.read(MAX_FILE_BYTES + 1)
+                    if stat.S_ISREG(os.fstat(fd).st_mode):
+                        data = handle.read(MAX_FILE_BYTES + 1)
+                    else:
+                        reason = "not a regular file"
         except OSError:
             reason = "could not be read"
         finally:
