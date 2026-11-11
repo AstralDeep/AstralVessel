@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import secrets
 import time
 from collections.abc import Awaitable, Callable
 from datetime import date
@@ -25,6 +26,7 @@ log = logging.getLogger("astralvessel")
 Emit = Callable[[dict[str, Any]], Awaitable[None]]
 OnMessage = Callable[[dict[str, Any]], Awaitable[None]]
 EVENT_OUTPUT_CHARS = 4000
+ENDING: set[asyncio.Future] = set()
 STEP_LIMIT_NOTE = ("You have reached the step limit for this turn. Do not call any more tools. "
                    "Answer now with what you have found, and say what you could not check.")
 
@@ -50,6 +52,8 @@ def system_prompt(package: AgentPackage, extra: tuple[str, ...] = ()) -> str:
              f"Tool commands run in {sandbox.workdir}."]
     if mounts:
         lines.append("Mounted data:" + mounts)
+    lines.append("Files a tool call writes under $TMPDIR are kept for later tool calls in this turn and "
+                 "deleted when the turn ends.")
     lines.append("Text you write in the same message as a tool call is shown as brief narration, not as your "
                  "answer. Your final message, with no tool calls, is the answer: write it in full there.")
     if package.manifest.output.primitives:
@@ -71,6 +75,8 @@ class Turn:
         self._sent = 0
         self.model = model
         self.runner = runner
+        self.workspace = secrets.token_hex(16)
+        self.used_workspace = False
         self.emit = emit
         self.allowed = set(package.manifest.tools.builtin) | {t.name for t in package.declared}
         if package.manifest.output.primitives:
@@ -104,6 +110,13 @@ class Turn:
         except Exception:  # noqa: BLE001  the turn still ends with turn.finished and is recorded
             log.warning("turn failed", exc_info=True)
             status, error = ev.STATUS_MODEL_ERROR, "the turn failed unexpectedly"
+        if self.used_workspace:
+            # Shielded: a second cancel must not skip turn.finished, and the sandbox still gets told.
+            ending = asyncio.ensure_future(self._end_workspace())
+            ENDING.add(ending)
+            ending.add_done_callback(ENDING.discard)
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.shield(ending)
         self._close_dangling_calls()
         if self.new_messages[-1]["role"] != "assistant":
             self.new_messages.append({"role": "assistant", "content": f"[this turn ended early: {status}]"})
@@ -154,6 +167,13 @@ class Turn:
                 output = await self._call_tool(call.id, call.name, call.arguments)
                 self.new_messages.append({"role": "tool", "tool_call_id": call.id, "content": output})
             await self._flush()
+
+    async def _end_workspace(self) -> None:
+        try:
+            async with asyncio.timeout(15):
+                await self.runner.end_turn(self.workspace)
+        except Exception:  # noqa: BLE001  the sandbox sweeps a workspace it was never told to end
+            log.warning("could not end the turn's workspace", exc_info=True)
 
     async def _flush(self) -> None:
         # Hand each completed message to the caller once, in order, so a dropped stream still leaves a usable prefix.
@@ -232,7 +252,8 @@ class Turn:
             timeout = tool.timeout_seconds or self.package.manifest.sandbox.tool_timeout_seconds
             return await self.services.call(tool, arguments, self.owner, timeout)
         if name in BUILTIN_TOOLS or name in {t.name for t in self.package.declared}:
-            return await self.runner.run(name, arguments)
+            self.used_workspace = True
+            return await self.runner.run(name, arguments, self.workspace)
         return f"tool {name} does not exist", True
 
     def _close_dangling_calls(self) -> None:
