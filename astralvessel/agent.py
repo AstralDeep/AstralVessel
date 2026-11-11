@@ -218,7 +218,6 @@ class Turn:
         else:
             try:
                 output, failed = await self._dispatch(name, arguments)
-                output = await self._attach_files(call_id, output)
             except BaseException:
                 # A cancel or the deadline stopped the tool; still close the event pair before unwinding.
                 with contextlib.suppress(Exception):
@@ -228,6 +227,7 @@ class Turn:
                 raise
         limit = self.package.manifest.sandbox.tool_output_chars
         output, truncated = clip(output, limit)
+        output = await self._attach_files(call_id, output)  # after clipping, so the model always sees the notes
         shown, _ = clip(output, EVENT_OUTPUT_CHARS)
         await self.emit(ev.event(ev.TOOL_FINISHED, call_id=call_id, name=name, output=shown, error=failed,
                                  truncated=truncated, elapsed_ms=int((time.monotonic() - started) * 1000)))

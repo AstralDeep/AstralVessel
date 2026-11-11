@@ -55,6 +55,14 @@ def test_the_outbox_returns_at_most_four_files_per_call(tmp_path):
     assert len(found) == outputs.MAX_FILES_PER_CALL and len(notes) == 2 and "at most 4" in notes[0]
 
 
+def test_a_flooded_outbox_gives_the_model_a_short_summary(tmp_path):
+    for index in range(50):
+        (tmp_path / f"t{index}.txt").write_text("x")
+    found, notes = outputs.collect(str(tmp_path), ["csv"])
+    assert found == [] and len(notes) == outputs.MAX_NOTES and notes[-1] == "[41 more entries not attached]"
+    assert os.listdir(tmp_path) == []
+
+
 def test_the_vessel_checks_files_again_when_they_arrive():
     wire = [outputs.ToolFile("chart.png", "image/png", PNG).wire(),
             {"name": "../../x.png", "data": base64.b64encode(PNG).decode()},
@@ -159,3 +167,27 @@ async def test_a_caller_that_does_not_accept_a_file_type_does_not_get_it(file_ve
     async with client._client.stream("POST", "/agents/tester", headers=headers, json=body) as response:
         text = (await response.aread()).decode()
     assert "turn.finished" in text and '"name": "file"' not in text and '"name":"file"' not in text
+
+
+async def test_the_model_sees_attached_files_even_when_the_output_is_clipped(package_dir, model):
+    from astralvessel.agent import Turn
+    from astralvessel.model import ModelClient
+    allow_files(package_dir)
+    package = load_package(package_dir)
+    runner = FileRunner(package, 1)
+
+    async def flood(name, args, workspace=None):
+        return "x" * (package.manifest.sandbox.tool_output_chars * 2), False
+
+    runner.run = flood
+    model.replies = [tool_reply("bash", {"command": "plot"}), text_reply("done")]
+    events = []
+
+    async def emit(item):
+        events.append(item)
+
+    client = ModelClient("http://model.test/v1", "k", "test-model", transport=model.transport(), retries=1)
+    await Turn(package, client, runner, emit).run([], "chart", conversation_id="c", turn_id="t")
+    tool_message = model.requests[1]["messages"][-1]["content"]
+    assert "output truncated" in tool_message and tool_message.endswith("to the answer]")
+    assert [e["name"] for e in events if e["type"] == "file.added"] == ["chart-0.png"]

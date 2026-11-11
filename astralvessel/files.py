@@ -17,6 +17,7 @@ MAX_FILE_BYTES = 4 * 1024 * 1024
 MAX_FILES_PER_CALL = 4
 MAX_FILES_PER_TURN = 8
 MAX_TURN_BYTES = 16 * 1024 * 1024
+MAX_NOTES = 10
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")
 
 
@@ -96,6 +97,8 @@ def collect(outbox: str, allowed: list[str]) -> tuple[list[ToolFile], list[str]]
                 files.append(ToolFile(name, media_type, data))
                 continue
         notes.append(f"[not attached {name[:100]}: {reason}]")
+    if len(notes) > MAX_NOTES:
+        notes[MAX_NOTES - 1:] = [f"[{len(notes) - MAX_NOTES + 1} more entries not attached]"]
     return files, notes
 
 
