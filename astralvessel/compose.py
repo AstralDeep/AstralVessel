@@ -10,7 +10,7 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
-from .deployment import Deployment, sandbox_token
+from .deployment import Deployment, egress_token, sandbox_token
 
 IMAGE = "astralvessel:local"
 REGISTRY = "ghcr.io/astraldeep"
@@ -83,7 +83,6 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
         "VESSEL_DEPLOYMENT": "/deploy/deployment.toml",
         "VESSEL_PACKAGES_ROOT": "/agents",
         "VESSEL_MODEL_URL": "http://egress:8080/v1",
-        "VESSEL_MODEL_KEY": "via-egress",
         "VESSEL_WEB_PROXY": "http://egress:3128",
         "VESSEL_SANDBOX_URL_TEMPLATE": f"http://sandbox-{{id}}:{SANDBOX_PORT}",
         "VESSEL_SANDBOX_TOKEN": _env_ref("env:VESSEL_SANDBOX_TOKEN"),
@@ -101,6 +100,7 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
         "egress": {**HARDENED, **_image(repo_root and repo_root / "egress", "astralvessel-egress"),
                    "environment": {"LLM_BASE_URL": deployment.egress.upstream_url,
                                    "LLM_API_KEY": _env_ref(deployment.egress.upstream_key)},
+                   "env_file": [".generated/egress.env"],
                    "networks": ["egress", "outside"], "mem_limit": "512m", "pids_limit": 128},
     }
     networks: dict[str, Any] = {
@@ -153,6 +153,7 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
     services["vessel"] = {
         **HARDENED, **_image(repo_root),
         "environment": vessel_env,
+        "env_file": [".generated/vessel.env"],
         "volumes": vessel_volumes,
         "tmpfs": ["/tmp:size=64m,noexec,nosuid,nodev,mode=1777"],
         "networks": vessel_networks,
@@ -173,6 +174,12 @@ def write(deployment: Deployment, out: Path, *, repo_root: Path | None, master_t
     secrets.mkdir(mode=0o700, exist_ok=True)
     (secrets / ".gitignore").write_text("*\n")
     written = [out]
+    for name, line in (("egress", "EGRESS_TOKEN"), ("vessel", "VESSEL_MODEL_KEY")):
+        path = secrets / f"{name}.env"
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w") as handle:
+            handle.write(f"{line}={egress_token(master_token)}\n")
+        written.append(path)
     for agent_id in deployment.agents:
         path = secrets / f"sandbox-{agent_id}.env"
         fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

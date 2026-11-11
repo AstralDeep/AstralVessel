@@ -78,7 +78,9 @@ agent declares what it needs; the deployment file is the only place access is gr
   the deployment grants, with credentials the deployment holds, so the sandbox never needs network
   access or a secret. The application learns which app, user and agent asked through `X-Vessel-*`
   headers.
-- **The egress** is the only way out. It adds the model key, so the harness never holds it. Its
+- **The egress** is the only way out. It adds the model key, so the harness never holds it, and
+  forwards model calls only for the vessel, which holds a token derived at deploy time (so an agent's
+  model `api_key` stays `env:VESSEL_MODEL_KEY`, the default). Its
   web proxy reaches only globally routable addresses on ports 80 and 443.
 - **Web search** runs on a SearXNG container the deployment starts beside the egress: no account or
   key, several engines at once so one engine's CAPTCHA or rate limit leaves the others answering, and
@@ -201,7 +203,7 @@ cp deploy/.env.example deploy/.env      # fill in the model key, app key and its
 cd deploy
 astralvessel deploy deployment.toml      # (installed as in Develop) writes compose.generated.yml and sandbox tokens
 docker compose -f compose.generated.yml --env-file .env up -d --build
-./verify-isolation.sh                    # 32 isolation probes from inside the containers
+./verify-isolation.sh                    # 34 isolation probes from inside the containers
 set -a; . ./.env; set +a
 for agent in field-guide field-guide-reader; do
   docker run --rm --network astralvessel_front -v "$PWD/../conformance:/conformance:ro" astralvessel:local \

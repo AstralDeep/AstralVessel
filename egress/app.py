@@ -3,6 +3,7 @@
 # proxy.py serves the checked forward proxy for webfetch and websearch.
 from __future__ import annotations
 
+import hmac
 import ipaddress
 import logging
 import os
@@ -20,6 +21,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(na
 
 LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://api-llm-factory.ai.uky.edu/v1").rstrip("/")
 LLM_API_KEY = os.environ.get("LLM_API_KEY", "")
+EGRESS_TOKEN = os.environ.get("EGRESS_TOKEN", "")
 ALLOWED_LLM_PATHS = {"chat/completions": {"POST"}, "models": {"GET"}}
 
 
@@ -38,6 +40,8 @@ async def _start() -> None:
     )
     if not LLM_API_KEY:
         log.error("LLM_API_KEY is not set; LLM calls will fail.")
+    if not EGRESS_TOKEN:
+        log.error("EGRESS_TOKEN is not set; every model call will be refused.")
 
 
 @app.on_event("shutdown")
@@ -60,6 +64,11 @@ async def health() -> dict[str, Any]:
 
 @app.api_route("/v1/{path:path}", methods=["GET", "POST"])
 async def llm(path: str, request: Request):
+    # Other services share the egress network (search does), so only a caller holding the vessel's token may spend
+    # the key. Without a configured token the passthrough stays shut.
+    offered = request.headers.get("authorization", "").removeprefix("Bearer ")
+    if not EGRESS_TOKEN or not hmac.compare_digest(offered.encode(), EGRESS_TOKEN.encode()):
+        raise HTTPException(status_code=403, detail="the egress token is missing or wrong")
     allowed = ALLOWED_LLM_PATHS.get(path)
     if not allowed or request.method not in allowed:
         raise HTTPException(status_code=404, detail="Not a route this egress forwards.")
