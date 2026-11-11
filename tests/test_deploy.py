@@ -324,3 +324,26 @@ def test_the_model_endpoint_is_required_and_may_come_from_the_environment(packag
     egress = generate(load_deployment(path), repo_root=None)["services"]["egress"]["environment"]
     assert egress["LLM_BASE_URL"].startswith("${MODEL_URL:?")
 
+
+
+def test_an_issuer_key_file_is_mounted_into_the_vessel(package_dir, tmp_path, monkeypatch):
+    (tmp_path / "keys.json").write_text('{"keys": []}')
+    path = tmp_path / "deployment.toml"
+    path.write_text(deployment_text(package_dir, mounts="", apps="") + '[[issuers]]\nid = "astral"\nissuer = "https://i.test"\n'
+                    'audience = "a"\njwks_file = "keys.json"\nagents = ["guide"]\n')
+    vessel = generate(load_deployment(path), repo_root=None)["services"]["vessel"]
+    assert f"{tmp_path / 'keys.json'}:/deploy-keys/astral.json:ro" in vessel["volumes"]
+    assert vessel["environment"]["VESSEL_JWKS_DIR"] == "/deploy-keys"
+    inside = tmp_path / "deploy-keys"  # stands in for the container's mount point
+    inside.mkdir()
+    (inside / "astral.json").write_text('{"keys": []}')
+    monkeypatch.setenv("VESSEL_JWKS_DIR", str(inside))
+    assert load_deployment(path).issuers[0].jwks_file == f"{inside}/astral.json"
+    from astralvessel.compose import inputs_hash
+    monkeypatch.delenv("VESSEL_JWKS_DIR")
+    before = inputs_hash(load_deployment(path))
+    (tmp_path / "keys.json").write_text('{"keys": [{"kid": "new"}]}')
+    assert inputs_hash(load_deployment(path)) != before  # a new key recreates the vessel on up -d
+    (tmp_path / "keys.json").unlink()
+    with pytest.raises(ValueError, match="not a file"):
+        load_deployment(path)
