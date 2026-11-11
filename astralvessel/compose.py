@@ -14,6 +14,7 @@ from typing import Any
 from .deployment import Deployment, egress_token, sandbox_token, size_bytes
 
 IMAGE = "astralvessel:local"
+JWKS_DIR = "/deploy-keys"
 REGISTRY = "ghcr.io/astraldeep"
 SANDBOX_PORT = 8710
 SEARXNG_IMAGE = "searxng/searxng:2026.10.25-54ca1d9cf"
@@ -124,6 +125,10 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
             "networks": ["egress"], "mem_limit": "512m", "pids_limit": 128, "depends_on": ["egress"],
         }
     vessel_volumes = [f"{deployment.path}:/deploy/deployment.toml:ro", "vessel_data:/data"]
+    keyed = [issuer for issuer in deployment.issuers if issuer.jwks_file]
+    vessel_volumes += [f"{issuer.jwks_file}:{JWKS_DIR}/{issuer.id}.json:ro" for issuer in keyed]
+    if keyed:
+        vessel_env["VESSEL_JWKS_DIR"] = JWKS_DIR
     vessel_networks: dict[str, Any] = {"front": {"ipv4_address": deployment.vessel.front_address}, "egress": {}}
     for agent_id, agent in deployment.agents.items():
         tools = f"tools-{agent_id}"
