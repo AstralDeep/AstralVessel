@@ -1,12 +1,14 @@
-# Unit tests for the manifest loader, tools, primitives validation, the app-side history store, and the A2A decoder.
+# Unit tests for the manifest loader, tools, primitives validation, the app-side history store, the A2A decoder,
+# and web search.
 
 from __future__ import annotations
 
 import asyncio
 
+import httpx
 import pytest
 
-from astralvessel import sandbox
+from astralvessel import sandbox, web
 from astralvessel.client import decode, integral
 from astralvessel.history import HistoryStore as Store
 from astralvessel.manifest import load_package
@@ -196,3 +198,67 @@ async def test_declared_flag_tools_accept_only_declared_parameters(package_dir):
 def test_sandbox_server_refuses_a_short_token(package_dir):
     with pytest.raises(ValueError, match="16"):
         sandbox.sandbox_app(str(package_dir), token="short")
+
+
+REAL_CLIENT = httpx.AsyncClient
+
+
+def search_replies(monkeypatch, status, body, url=None):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        if isinstance(body, dict):
+            return httpx.Response(status, json=body)
+        return httpx.Response(status, text=body)
+
+    monkeypatch.setattr(web.httpx, "AsyncClient", lambda **kw: REAL_CLIENT(
+        transport=httpx.MockTransport(handler), **{k: v for k, v in kw.items() if k != "proxy"}))
+    if url:
+        monkeypatch.setenv("VESSEL_SEARCH_URL", url)
+    else:
+        monkeypatch.delenv("VESSEL_SEARCH_URL", raising=False)
+    return seen
+
+
+async def test_searxng_results_reach_the_model_fenced(monkeypatch):
+    seen = search_replies(monkeypatch, 200, {"results": [
+        {"title": "Ada Lovelace", "url": "https://example.org/ada", "content": "First programmer."},
+        {"title": "No link"}, {"title": "Second", "url": "https://example.org/2", "content": None}]},
+        url="http://search:8080/")
+    text, error = await web.websearch({"query": "ada lovelace", "max_results": 1})
+    assert not error and "https://example.org/ada" in text and "example.org/2" not in text
+    assert text.startswith('<web_content source="web search: ada lovelace">')
+    assert str(seen[0].url) == "http://search:8080/search?q=ada+lovelace&format=json"
+
+
+async def test_searxng_failures_are_errors_never_no_results(monkeypatch):
+    search_replies(monkeypatch, 200, {"results": [], "unresponsive_engines": [["google", "CAPTCHA"]]},
+                   url="http://search:8080")
+    text, error = await web.websearch({"query": "x"})
+    assert error and "does not mean nothing exists" in text
+    search_replies(monkeypatch, 200, {"results": [], "unresponsive_engines": []}, url="http://search:8080")
+    assert await web.websearch({"query": "x"}) == ("no results", False)
+    search_replies(monkeypatch, 500, "boom", url="http://search:8080")
+    assert await web.websearch({"query": "x"}) == ("the search service returned HTTP 500", True)
+    search_replies(monkeypatch, 200, "<html>not json</html>", url="http://search:8080")
+    assert (await web.websearch({"query": "x"}))[1] is True
+    search_replies(monkeypatch, 200, {"results": "oops"}, url="http://search:8080")
+    assert (await web.websearch({"query": "x"}))[1] is True
+
+
+async def test_duckduckgo_challenge_is_an_error(monkeypatch):
+    search_replies(monkeypatch, 202, "<html>anomaly challenge</html>")
+    text, error = await web.websearch({"query": "x"})
+    assert error and "HTTP 202, a bot challenge" in text
+    search_replies(monkeypatch, 200, "<html>something unexpected</html>")
+    text, error = await web.websearch({"query": "x"})
+    assert error and "no readable results" in text
+    search_replies(monkeypatch, 200, '<div class="no-results">No results.</div>')
+    assert await web.websearch({"query": "x"}) == ("no results", False)
+    page = ('<div class="result results_links"><a class="result__a" href="//duckduckgo.com/l/?uddg='
+            'https%3A%2F%2Fexample.org%2Fpage">An <b>Example</b></a><a class="result__snippet" href="#">Snip</a>'
+            '</div>\n</div>')
+    search_replies(monkeypatch, 200, page)
+    text, error = await web.websearch({"query": "x"})
+    assert not error and "An Example\nhttps://example.org/page\nSnip" in text

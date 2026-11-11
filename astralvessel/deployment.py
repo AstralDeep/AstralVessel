@@ -9,6 +9,7 @@ import json
 import os
 import tomllib
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -31,6 +32,12 @@ class VesselSection(Strict):
 class EgressSection(Strict):
     upstream_url: str = "https://api-llm-factory.ai.uky.edu/v1"
     upstream_key: str = "env:VESSEL_UPSTREAM_MODEL_KEY"
+
+
+class SearchSection(Strict):
+    # Where websearch gets results: a SearXNG container this deployment runs (no account or key, its traffic leaves
+    # through the egress), or DuckDuckGo's HTML page, which answers repeated queries with a bot challenge.
+    provider: Literal["searxng", "duckduckgo"] = "searxng"
 
 
 class MountGrant(Strict):
@@ -113,6 +120,7 @@ class IssuerEntry(Strict):
 class DeploymentFile(Strict):
     vessel: VesselSection = VesselSection()
     egress: EgressSection = EgressSection()
+    search: SearchSection = SearchSection()
     agents: list[AgentEntry]
     apps: list[AppEntry] = []
     issuers: list[IssuerEntry] = []
@@ -166,6 +174,7 @@ class Deployment(BaseModel):
     path: Path
     vessel: VesselSection
     egress: EgressSection
+    search: SearchSection = SearchSection()
     agents: dict[str, Agent]
     apps: list[AppEntry]
     issuers: list[IssuerEntry] = []
@@ -188,8 +197,8 @@ def load_deployment(path: str | Path, packages_root: str | None = None) -> Deplo
                                  services=entry.services, prompt_append=tuple(entry.prompt_append))
     issuers = [i.model_copy(update={"jwks_file": str((path.parent / i.jwks_file).resolve())}) if i.jwks_file else i
                for i in raw.issuers]
-    return Deployment(path=path, vessel=raw.vessel, egress=raw.egress, agents=agents, apps=raw.apps,
-                      issuers=issuers)
+    return Deployment(path=path, vessel=raw.vessel, egress=raw.egress, search=raw.search, agents=agents,
+                      apps=raw.apps, issuers=issuers)
 
 
 def _check_grants(entry: AgentEntry, package: AgentPackage) -> None:
