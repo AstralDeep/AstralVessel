@@ -101,7 +101,7 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
             vessel_env[value[4:]] = _env_ref(value)
     services: dict[str, Any] = {
         "egress": {**HARDENED, **_image(repo_root and repo_root / "egress", "astralvessel-egress", project),
-                   "environment": {"LLM_BASE_URL": deployment.egress.upstream_url,
+                   "environment": {"LLM_BASE_URL": _env_ref(deployment.egress.upstream_url),
                                    "LLM_API_KEY": _env_ref(deployment.egress.upstream_key)},
                    "env_file": [".generated/egress.env"],
                    "networks": ["egress", "outside"], "mem_limit": "512m", "pids_limit": 128},

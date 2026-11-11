@@ -85,6 +85,8 @@ deadline_seconds = 120
 tool_timeout_seconds = 30
 """)
     (workdir / "deployment.toml").write_text(f"""
+[egress]
+upstream_url = "http://model.test/v1"
 [[agents]]
 id = "stress"
 package = "{package}"

@@ -12,6 +12,7 @@ import re
 import tomllib
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -41,8 +42,21 @@ class VesselSection(Strict):
 
 
 class EgressSection(Strict):
-    upstream_url: str = "https://api-llm-factory.ai.uky.edu/v1"
+    # The OpenAI-compatible model endpoint (an http(s) URL, or "env:NAME"); there is no default provider.
+    upstream_url: str
     upstream_key: str = "env:VESSEL_UPSTREAM_MODEL_KEY"
+
+    @model_validator(mode="after")
+    def endpoint(self) -> EgressSection:
+        url = self.upstream_url
+        if url.startswith("env:"):
+            ok = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", url[4:]) is not None
+        else:
+            parts = urlsplit(url)
+            ok = parts.scheme.lower() in ("http", "https") and bool(parts.hostname) and not re.search(r"\s", url)
+        if not ok:
+            raise ValueError("egress upstream_url must be an http(s) URL with a host, or env:NAME")
+        return self
 
 
 class SearchSection(Strict):
@@ -156,7 +170,7 @@ class IssuerEntry(Strict):
 
 class DeploymentFile(Strict):
     vessel: VesselSection = VesselSection()
-    egress: EgressSection = EgressSection()
+    egress: EgressSection
     search: SearchSection = SearchSection()
     agents: list[AgentEntry]
     apps: list[AppEntry] = []
