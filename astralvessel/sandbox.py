@@ -7,6 +7,7 @@ import asyncio
 import hmac
 import os
 import signal
+import time
 from typing import Any, Protocol
 
 import httpx
@@ -73,7 +74,7 @@ class LocalRunner:
 
     async def end_turn(self, workspace: str) -> None:
         self.files.pop(workspace, None)
-        end_workspace(self.confinement, workspace)
+        await asyncio.to_thread(end_workspace, self.confinement, workspace)
 
     def take_files(self, workspace: str) -> list[outputs.ToolFile]:
         return self.files.pop(workspace, [])
@@ -159,6 +160,9 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
     runner = LocalRunner(package, confinement)
     profile = os.environ.get("VESSEL_PROFILE_HASH", "")
     stale_after = package.manifest.sandbox.deadline_seconds + 60
+    started: dict[str, float] = {}  # live turns and when each was first seen
+    running: dict[str, set[asyncio.Task]] = {}
+    ended: dict[str, None] = {}  # recently ended keys, oldest first; a late call for one is refused
 
     def authorized(request: Request) -> bool:
         supplied = request.headers.get("authorization", "").removeprefix("Bearer ")
@@ -181,15 +185,27 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
             workspace = workspace_of(body)
         except ValueError:
             return JSONResponse({"error": True, "output": "invalid workspace"}, status_code=400)
-        sweep_workspaces(confinement, stale_after)
+        if workspace in ended:
+            return JSONResponse({"error": True, "output": "this turn has ended"}, status_code=410)
+        now = time.monotonic()
+        if workspace:
+            started.setdefault(workspace, now)
+        for key in [k for k, t in started.items() if now - t > stale_after]:
+            del started[key]
+        await asyncio.to_thread(sweep_workspaces, confinement, set(started))
         reap_strays()
         task = asyncio.create_task(runner.run(name, args, workspace))
+        if workspace:
+            running.setdefault(workspace, set()).add(task)
+            task.add_done_callback(lambda t: running.get(workspace, set()).discard(t))
         try:
             while not task.done():
                 done, _ = await asyncio.wait({task}, timeout=0.5)
                 if not done and await request.is_disconnected():
                     task.cancel()
                     return JSONResponse({"error": True, "output": "cancelled"}, status_code=499)
+            if task.cancelled():
+                return JSONResponse({"error": True, "output": "this turn has ended"}, status_code=410)
             output, error = task.result()
         finally:
             reap_strays()
@@ -205,6 +221,15 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
             workspace = None
         if workspace is None:
             return JSONResponse({"error": True, "output": "invalid workspace"}, status_code=400)
+        ended[workspace] = None
+        while len(ended) > 4096:
+            del ended[next(iter(ended))]
+        started.pop(workspace, None)
+        # Stop the turn's calls still in flight first, so none writes into or recreates the workspace after it.
+        tasks = running.pop(workspace, set())
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
         await runner.end_turn(workspace)
         return JSONResponse({"ok": True})
 

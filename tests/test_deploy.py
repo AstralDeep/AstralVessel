@@ -247,7 +247,23 @@ def test_stale_workspaces_are_swept(tmp_path):
     old, fresh, other = tmp_path / ("turn-" + "a" * 32), tmp_path / ("turn-" + "b" * 32), tmp_path / "call-x"
     for path in (old, fresh, other):
         path.mkdir()
-    os.utime(old, (0, 0))
-    os.utime(other, (0, 0))
-    sweep_workspaces(confinement, 60)
+    os.utime(old, (4102444800, 4102444800))  # a call can set its workspace's times; the sweep ignores them
+    sweep_workspaces(confinement, {"b" * 32})
     assert sorted(p.name for p in tmp_path.iterdir()) == ["call-x", fresh.name]
+
+
+@pytest.mark.parametrize("tool", ["read", "list", "glob"])
+def test_in_server_tools_check_where_the_opened_path_really_points(tmp_path, tool):
+    # A call can swap a link after the path check; the tools check the opened descriptor too.
+    from astralvessel.tools import Confinement, _glob, _list, _read
+    data, outside = tmp_path / "data", tmp_path / "outside"
+    data.mkdir()
+    outside.mkdir()
+    (outside / "secret.txt").write_text("secret")
+    (data / "link").symlink_to(outside / "secret.txt" if tool == "read" else outside)
+    confinement = Confinement(readable=(str(data),), scratch_root=str(tmp_path / "calls"))
+    call = {"read": lambda: _read({"path": "link"}, str(data), confinement),
+            "list": lambda: _list({"path": "link"}, str(data), confinement),
+            "glob": lambda: _glob({"pattern": "*", "path": "link"}, str(data), 5, confinement)}[tool]
+    with pytest.raises(PermissionError):
+        asyncio.run(call())
