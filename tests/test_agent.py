@@ -205,6 +205,40 @@ async def test_a_turn_passes_one_workspace_to_its_calls_and_ends_it(package_dir,
     assert len(turn.workspace) == 32 and other.workspace != turn.workspace
 
 
+async def test_a_turn_without_sandbox_calls_does_not_call_the_sandbox_to_end(package_dir, model):
+    model.replies = [text_reply("no tools needed")]
+    turn, _ = make_turn(package_dir, model)
+    ended = []
+
+    async def end(workspace):
+        ended.append(workspace)
+
+    turn.runner.end_turn = end
+    assert (await run(turn))["status"] == "ok" and ended == []
+
+
+async def test_a_second_cancel_while_ending_still_finishes_the_turn(package_dir, model):
+    model.replies = [tool_reply("bash", {"command": "sleep 30"}), text_reply("never")]
+    turn, events = make_turn(package_dir, model)
+    started, ended = asyncio.Event(), []
+
+    async def end(workspace):
+        started.set()
+        await asyncio.sleep(0.5)
+        ended.append(workspace)
+
+    turn.runner.end_turn = end
+    task = asyncio.create_task(run(turn))
+    await asyncio.sleep(1)
+    task.cancel()
+    await started.wait()
+    task.cancel()
+    result = await task
+    assert result["status"] == "cancelled" and events[-1]["type"] == "turn.finished"
+    await asyncio.sleep(0.7)
+    assert ended == [turn.workspace]
+
+
 async def test_a_cancelled_turn_still_ends_its_workspace(package_dir, model):
     model.replies = [tool_reply("bash", {"command": "sleep 30"}), text_reply("never")]
     turn, _ = make_turn(package_dir, model)
