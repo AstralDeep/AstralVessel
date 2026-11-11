@@ -40,8 +40,15 @@ class VesselSection(Strict):
 
 
 class EgressSection(Strict):
-    upstream_url: str = "https://api-llm-factory.ai.uky.edu/v1"
+    # The OpenAI-compatible model endpoint (an http(s) URL, or "env:NAME"); there is no default provider.
+    upstream_url: str
     upstream_key: str = "env:VESSEL_UPSTREAM_MODEL_KEY"
+
+    @model_validator(mode="after")
+    def endpoint(self) -> EgressSection:
+        if not self.upstream_url.startswith(("env:", "http://", "https://")):
+            raise ValueError("egress upstream_url must be an http(s) URL or env:NAME")
+        return self
 
 
 class SearchSection(Strict):
@@ -129,7 +136,7 @@ class IssuerEntry(Strict):
 
 class DeploymentFile(Strict):
     vessel: VesselSection = VesselSection()
-    egress: EgressSection = EgressSection()
+    egress: EgressSection
     search: SearchSection = SearchSection()
     agents: list[AgentEntry]
     apps: list[AppEntry] = []

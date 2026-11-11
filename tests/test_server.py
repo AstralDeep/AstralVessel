@@ -30,6 +30,8 @@ def deployment_file(package_dir, tmp_path):
 [vessel]
 public_url = "http://vessel.test"
 
+[egress]
+upstream_url = "https://models.test/v1"
 [[agents]]
 id = "tester"
 package = "{package_dir}"

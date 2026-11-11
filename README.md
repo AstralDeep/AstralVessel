@@ -54,7 +54,7 @@ tools, each a small TOML file. A deployment file (`deployment.toml`) lists the a
 serves, the sandbox and services each one gets, and which applications may call which agents. The
 agent declares what it needs; the deployment file is the only place access is granted.
 
-![Diagram of who holds what. The app holds its key and its users' conversation history, names each user with X-Vessel-User, and is also on an outside network for its users' browsers. It calls the vessel over A2A 1.0. The vessel serves every agent and runs the agent loop; it holds only runs in flight, never conversation history or the model key. It calls each agent's sandbox over /run (HTTP); there is one sandbox per agent, which runs the tools on read-only data and never has network, secrets, history, or a route to the vessel's API. The vessel reaches the egress over the OpenAI-compatible API, which is also the web proxy for webfetch and websearch. The egress holds the model key, reaches only public addresses on ports 80 and 443, and calls the model over HTTPS: GLM 5.3 on the UK LLM Factory, or any OpenAI-compatible model. Everything except the egress's outbound link and the app's browser-facing side sits on internal Docker networks with no route out.](https://raw.githubusercontent.com/AstralDeep/AstralVessel/main/assets/who-holds-what.svg)
+![Diagram of who holds what. The app holds its key and its users' conversation history, names each user with X-Vessel-User, and is also on an outside network for its users' browsers. It calls the vessel over A2A 1.0. The vessel serves every agent and runs the agent loop; it holds only runs in flight, never conversation history or the model key. It calls each agent's sandbox over /run (HTTP); there is one sandbox per agent, which runs the tools on read-only data and never has network, secrets, history, or a route to the vessel's API. The vessel reaches the egress over the OpenAI-compatible API, which is also the web proxy for webfetch and websearch. The egress holds the model key, reaches only public addresses on ports 80 and 443, and calls the model over HTTPS: any OpenAI-compatible model the operator configures. Everything except the egress's outbound link and the app's browser-facing side sits on internal Docker networks with no route out.](https://raw.githubusercontent.com/AstralDeep/AstralVessel/main/assets/who-holds-what.svg)
 
 - **The app** authenticates with its own key, which the deployment limits to certain agents, and names
   each end user with an `X-Vessel-User` header. An orchestrator with an identity provider (such as
@@ -218,7 +218,7 @@ need Docker with Compose.
 ## Run the example
 
 ```bash
-cp deploy/.env.example deploy/.env      # fill in the model key, app key and its sha256, and the sandbox token
+cp deploy/.env.example deploy/.env      # fill in the model endpoint and key, app key and its sha256, sandbox token
 cd deploy
 astralvessel deploy deployment.toml      # (installed as in Develop) writes compose.generated.yml and sandbox tokens
 docker compose -f compose.generated.yml --env-file .env up -d --build

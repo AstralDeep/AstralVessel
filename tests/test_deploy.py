@@ -24,6 +24,8 @@ WEB_APP = '[[apps]]\nname = "web"\nkey_sha256 = "env:WEB_KEY_SHA256"\nagents = [
 
 def deployment_text(package, mounts='mounts = [{ target = "/data", source = "env:DATA_DIR" }]', apps=WEB_APP) -> str:
     return f"""
+[egress]
+upstream_url = "https://models.test/v1"
 [[agents]]
 id = "guide"
 package = "{package}"
@@ -305,3 +307,17 @@ def test_a_second_project_keeps_its_own_images_and_folder(package_dir, tmp_path)
     path.write_text(deployment_text(package_dir, mounts=""))
     with pytest.raises(SystemExit, match="infocus"):
         write(load_deployment(path), out, repo_root=None, master_token="m" * 16)
+
+
+def test_the_model_endpoint_is_required_and_may_come_from_the_environment(package_dir, tmp_path):
+    path = tmp_path / "deployment.toml"
+    path.write_text(deployment_text(package_dir, mounts="").replace('upstream_url = "https://models.test/v1"\n', ""))
+    with pytest.raises(ValueError, match="upstream_url"):
+        load_deployment(path)
+    path.write_text(deployment_text(package_dir, mounts="").replace('"https://models.test/v1"', '"ftp://x"'))
+    with pytest.raises(ValueError, match="http"):
+        load_deployment(path)
+    path.write_text(deployment_text(package_dir, mounts="").replace('"https://models.test/v1"', '"env:MODEL_URL"'))
+    egress = generate(load_deployment(path), repo_root=None)["services"]["egress"]["environment"]
+    assert egress["LLM_BASE_URL"].startswith("${MODEL_URL:?")
+

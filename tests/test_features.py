@@ -36,6 +36,8 @@ def deployment(path, package, services='[agents.services.records]\nurl = "http:/
     path.write_text(f"""
 [vessel]
 public_url = "http://vessel.test"
+[egress]
+upstream_url = "https://models.test/v1"
 [[agents]]
 id = "tester"
 package = "{package}"

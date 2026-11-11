@@ -72,7 +72,7 @@ jobs:
           python - > .env <<'PY'
           import hashlib, secrets
           app = secrets.token_urlsafe(32)
-          print(f"VESSEL_UPSTREAM_MODEL_KEY=ci\nVESSEL_APP_KEY={app}")
+          print(f"VESSEL_UPSTREAM_MODEL_URL=https://api.openai.com/v1\nVESSEL_UPSTREAM_MODEL_KEY=ci\nVESSEL_APP_KEY={app}")
           print(f"VESSEL_APP_KEY_SHA256={hashlib.sha256(app.encode()).hexdigest()}")
           print(f"VESSEL_SANDBOX_TOKEN={secrets.token_urlsafe(32)}")
           PY
