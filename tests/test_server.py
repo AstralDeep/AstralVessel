@@ -246,7 +246,7 @@ async def test_unfinished_tasks_are_failed_after_a_restart(vessel, model, tmp_pa
     await engine.dispose()
 
 
-async def test_only_a_sandbox_with_the_expected_profile_is_served(deployment_file, model, tmp_path):
+async def test_only_a_sandbox_with_the_expected_profile_is_served(deployment_file, model, tmp_path, monkeypatch):
     settings = settings_for(deployment_file, tmp_path)
 
     class Sandbox(RemoteRunner):
@@ -269,6 +269,23 @@ async def test_only_a_sandbox_with_the_expected_profile_is_served(deployment_fil
         await asyncio.sleep(0.1)
         client = VesselClient("http://vessel.test", APP_KEY, transport=httpx.ASGITransport(app=app))
         assert (await client.agents("alice"))[0]["available"] is False
+    # An unreadable fingerprint input marks only that agent unavailable; the others are still checked.
+    tester = settings.deployment.agents["tester"]
+    original = type(tester).fingerprint
+
+    def unreadable(agent):
+        if agent.id == "tester":
+            raise PermissionError("a file the vessel cannot read")
+        return original.fget(agent)
+
+    monkeypatch.setattr(type(tester), "fingerprint", property(unreadable))
+    second = settings.deployment.agents["second"].fingerprint
+    app = create_app(settings, runners={"tester": Sandbox(good), "second": Sandbox(second)},
+                     model_transport=model.transport())
+    async with app.router.lifespan_context(app):
+        await asyncio.sleep(0.1)
+        ops = VesselClient("http://vessel.test", OPS_KEY, transport=httpx.ASGITransport(app=app))
+        assert {a["id"]: a["available"] for a in await ops.agents("alice")} == {"tester": False, "second": True}
 
 
 async def test_an_orchestrator_can_call_the_agent_as_a_structured_skill(vessel, model):

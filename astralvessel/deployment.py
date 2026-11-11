@@ -161,13 +161,15 @@ class Agent(BaseModel):
 
     @property
     def fingerprint(self) -> str:
-        # Everything the sandbox and the vessel load for this agent at start, package files included; a change
-        # means the operator must redeploy, and the vessel stops serving the agent until they do.
+        # Everything that shapes the sandbox container, plus the manifest and declared tools that the vessel and
+        # the sandbox load once at start (prompt files are read every turn); a change means a redeploy.
         sandbox = self.package.manifest.sandbox.model_dump()
         dockerfile = self.package.manifest.sandbox.dockerfile
         image = build_inputs_hash(self.package.root, dockerfile) if dockerfile else None
+        loaded = {"manifest": self.package.manifest.model_dump(mode="json"),
+                  "declared": [tool.model_dump(mode="json") for tool in self.package.declared]}
         body = {"id": self.id, "profile": self.profile.model_dump(), "needs": sandbox, "image": image,
-                "package": package_hash(self.package.root), "schema": 2}
+                "loaded": loaded, "schema": 2}
         return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:16]
 
 
@@ -222,17 +224,6 @@ def _check_grants(entry: AgentEntry, package: AgentPackage) -> None:
         if not need.read_only or not grants[target].read_only:
             raise ValueError(f"agent {entry.id}: writable mounts ({target}) are not supported yet; mounts are "
                              "read-only and each call writes only its own scratch directory")
-
-
-def package_hash(root: Path) -> str:
-    # Every file in the agent package (manifest, prompt, tool declarations, scripts), by path and content.
-    digest = hashlib.sha256()
-    for file in sorted(p for p in root.rglob("*") if p.is_file()):
-        rel = file.relative_to(root)
-        if "__pycache__" in rel.parts or ".git" in rel.parts or root not in file.resolve().parents:
-            continue
-        digest.update(str(rel).encode() + b"\0" + hashlib.sha256(file.read_bytes()).digest())
-    return digest.hexdigest()
 
 
 def build_inputs_hash(root: Path, dockerfile: str) -> str:

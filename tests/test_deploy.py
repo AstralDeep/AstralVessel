@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import stat
 
 import pytest
@@ -67,7 +68,7 @@ def test_the_fingerprint_follows_the_sandbox_profile(data_package, tmp_path):
     assert sandbox_token("m" * 16, "a") != sandbox_token("m" * 16, "b")
 
 
-def test_an_edited_package_or_deployment_recreates_what_loads_it(data_package, tmp_path):
+def test_an_edited_manifest_tool_or_deployment_recreates_what_loads_it(data_package, tmp_path):
     path = tmp_path / "deployment.toml"
     path.write_text(deployment_text(data_package))
 
@@ -77,15 +78,20 @@ def test_an_edited_package_or_deployment_recreates_what_loads_it(data_package, t
         return spec["vessel"]["labels"]["astralvessel.inputs"], sandbox
 
     first = services()
+    # The vessel loads the package from its own mount; the same files must give the same fingerprint there.
+    mount = tmp_path / "mount"
+    shutil.copytree(data_package, mount / "guide")
+    assert load_deployment(path, packages_root=str(mount)).agents["guide"].fingerprint == first[1]
+    (data_package / "prompt.md").write_text("A new briefing, read on the next turn.")
+    (data_package / "notes.md~").write_text("an editor backup")
     assert services() == first
-    (data_package / "__pycache__").mkdir()
-    (data_package / "__pycache__" / "x.pyc").write_bytes(b"cache")
-    assert services() == first
-    prompt = data_package / "prompt.md"
-    prompt.write_text(prompt.read_text() + ".")
+    tool = data_package / "tools" / "echo.toml"
+    tool.write_text(tool.read_text().replace("Echo the input", "Echo the input back"))
     edited = services()
     assert edited[0] != first[0] and edited[1] != first[1]
-    (data_package / "tools" / "new.toml").write_text("# a new declared tool file\n")
+    (data_package / "tools" / "rank.toml").write_text(tool.read_text().replace('name = "echo"', 'name = "rank"'))
+    manifest = data_package / "vessel.toml"
+    manifest.write_text(manifest.read_text().replace('"tools/echo.toml"]', '"tools/echo.toml", "tools/rank.toml"]'))
     added = services()
     assert added[0] != edited[0] and added[1] != edited[1]
     path.write_text(path.read_text() + "\n# comment\n")
