@@ -27,6 +27,7 @@ log = logging.getLogger("astralvessel")
 Emit = Callable[[dict[str, Any]], Awaitable[None]]
 OnMessage = Callable[[dict[str, Any]], Awaitable[None]]
 EVENT_OUTPUT_CHARS = 4000
+ENDING: set[asyncio.Future] = set()
 STEP_LIMIT_NOTE = ("You have reached the step limit for this turn. Do not call any more tools. "
                    "Answer now with what you have found, and say what you could not check.")
 
@@ -76,6 +77,7 @@ class Turn:
         self.model = model
         self.runner = runner
         self.workspace = secrets.token_hex(16)
+        self.used_workspace = False
         self.emit = emit
         self.allowed = set(package.manifest.tools.builtin) | {t.name for t in package.declared}
         if package.manifest.output.primitives:
@@ -110,7 +112,13 @@ class Turn:
         except Exception:  # noqa: BLE001  the turn still ends with turn.finished and is recorded
             log.warning("turn failed", exc_info=True)
             status, error = ev.STATUS_MODEL_ERROR, "the turn failed unexpectedly"
-        await self._end_workspace()
+        if self.used_workspace:
+            # Shielded: a second cancel must not skip turn.finished, and the sandbox still gets told.
+            ending = asyncio.ensure_future(self._end_workspace())
+            ENDING.add(ending)
+            ending.add_done_callback(ENDING.discard)
+            with contextlib.suppress(asyncio.CancelledError):
+                await asyncio.shield(ending)
         self._close_dangling_calls()
         if self.new_messages[-1]["role"] != "assistant":
             self.new_messages.append({"role": "assistant", "content": f"[this turn ended early: {status}]"})
@@ -248,6 +256,7 @@ class Turn:
             timeout = tool.timeout_seconds or self.package.manifest.sandbox.tool_timeout_seconds
             return await self.services.call(tool, arguments, self.owner, timeout)
         if name in BUILTIN_TOOLS or name in {t.name for t in self.package.declared}:
+            self.used_workspace = True
             return await self.runner.run(name, arguments, self.workspace)
         return f"tool {name} does not exist", True
 
