@@ -221,7 +221,7 @@ def _check_grants(entry: AgentEntry, package: AgentPackage) -> None:
         # Every sandbox can serve many users at once, and a writable mount would be shared between them.
         if not need.read_only or not grants[target].read_only:
             raise ValueError(f"agent {entry.id}: writable mounts ({target}) are not supported yet; mounts are "
-                             "read-only and each call writes only its own scratch directory")
+                             "read-only and each turn writes only its own scratch directory")
 
 
 def build_inputs_hash(root: Path, dockerfile: str) -> str:

@@ -200,6 +200,38 @@ def test_sandbox_server_refuses_a_short_token(package_dir):
         sandbox.sandbox_app(str(package_dir), token="short")
 
 
+async def test_sandbox_server_checks_workspace_keys(package_dir):
+    app = sandbox.sandbox_app(str(package_dir), token="t" * 16, confine=False)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://sb") as client:
+        auth = {"Authorization": "Bearer " + "t" * 16}
+        bad = await client.post("/run", json={"name": "bash", "args": {"command": "true"}, "workspace": "../x"},
+                                headers=auth)
+        assert bad.status_code == 400
+        good = await client.post("/run", json={"name": "bash", "args": {"command": "true"}, "workspace": "c" * 32},
+                                 headers=auth)
+        assert good.status_code == 200 and not good.json()["error"]
+        assert (await client.post("/end", json={"workspace": "c" * 32}, headers=auth)).status_code == 200
+        assert (await client.post("/end", json={"workspace": 5}, headers=auth)).status_code == 400
+        assert (await client.post("/end", json=["x"], headers=auth)).status_code == 400
+        assert (await client.post("/end", json={"workspace": "c" * 32})).status_code == 401
+        late = await client.post("/run", json={"name": "bash", "args": {"command": "true"}, "workspace": "c" * 32},
+                                 headers=auth)
+        assert late.status_code == 410
+
+
+async def test_ending_a_turn_stops_its_calls_still_running(package_dir):
+    app = sandbox.sandbox_app(str(package_dir), token="t" * 16, confine=False)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://sb") as client:
+        auth = {"Authorization": "Bearer " + "t" * 16}
+        call = asyncio.create_task(client.post(
+            "/run", json={"name": "bash", "args": {"command": "sleep 30"}, "workspace": "e" * 32}, headers=auth))
+        await asyncio.sleep(0.5)
+        started = asyncio.get_running_loop().time()
+        assert (await client.post("/end", json={"workspace": "e" * 32}, headers=auth)).status_code == 200
+        response = await asyncio.wait_for(call, timeout=5)
+        assert response.status_code == 410 and asyncio.get_running_loop().time() - started < 5
+
+
 REAL_CLIENT = httpx.AsyncClient
 
 

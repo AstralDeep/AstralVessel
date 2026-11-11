@@ -5,13 +5,16 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import json
 import os
+import re
 import shutil
+import stat
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -27,13 +30,23 @@ ACTIVE_SESSIONS: set[int] = set()
 SPAWNING = [0]
 MAX_OUTPUT_BYTES = 1_000_000
 MAX_LINE_CHARS = 4000
+WORKSPACE_KEY = re.compile(r"[0-9a-f]{32}")
 
 
 @dataclass(frozen=True)
 class Confinement:
-    # Each call gets a fresh scratch directory under scratch_root and may read only these roots (plus the system).
+    # Each call gets a fresh scratch directory under scratch_root, or its turn's workspace when one is set, and
+    # may read only these roots (plus the system).
     readable: tuple[str, ...]
     scratch_root: str
+    workspace: str | None = None
+
+    def for_turn(self, key: str) -> Confinement:
+        # A turn's calls share one workspace; the key is random per turn, so concurrent turns never meet.
+        if not WORKSPACE_KEY.fullmatch(key):
+            raise ValueError("invalid workspace key")
+        path = os.path.join(self.scratch_root, f"turn-{key}")
+        return replace(self, readable=(*self.readable, path), workspace=path)
 
     def allows(self, path: Path) -> bool:
         real = os.path.realpath(path)
@@ -126,14 +139,18 @@ async def _proc(argv: list[str], *, cwd: str, timeout: int, shell: bool = False,
         argv = ["/bin/sh", "-c", argv[0]]
     env, scratch = SAFE_ENV, None
     if confinement is not None:
-        scratch = tempfile.mkdtemp(prefix="call-", dir=confinement.scratch_root)
+        if confinement.workspace:
+            scratch = confinement.workspace
+            os.makedirs(scratch, mode=0o700, exist_ok=True)
+        else:
+            scratch = tempfile.mkdtemp(prefix="call-", dir=confinement.scratch_root)
         env = {**SAFE_ENV, "HOME": scratch, "TMPDIR": scratch}
         flags = [f for root in confinement.readable for f in ("--read", root)]
         argv = [sys.executable, "-I", "-S", landlock.__file__, "--scratch", scratch, *flags, "--", *argv]
     try:
         return await _supervise(argv, cwd=cwd, env=env, timeout=timeout, stdin=stdin)
     finally:
-        if scratch:
+        if scratch and not confinement.workspace:
             shutil.rmtree(scratch, ignore_errors=True)
 
 
@@ -181,7 +198,23 @@ async def _collect(proc: asyncio.subprocess.Process, stdin: bytes | None) -> byt
     return b"".join(chunks)
 
 
-async def _read(args: dict[str, Any], workdir: str) -> tuple[str, bool]:
+def _open_checked(path: Path, confinement: Confinement | None, *, directory: bool = False) -> int:
+    # Open first, then check where the descriptor really points: a call can swap links in its workspace
+    # between a path check and the open, and these tools run in the unconfined server.
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | (os.O_DIRECTORY if directory else 0))
+    try:
+        real = os.readlink(f"/proc/self/fd/{fd}")
+        if confinement is not None and not confinement.allows(Path(real)):
+            raise PermissionError(errno.EACCES, "outside the agent's data")
+        if not directory and not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise IsADirectoryError(errno.EISDIR, "not a regular file")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+async def _read(args: dict[str, Any], workdir: str, confinement: Confinement | None = None) -> tuple[str, bool]:
     path = _resolve(args.get("path"), workdir)
     if not path.is_file():
         return f"not a file: {path}", True
@@ -190,7 +223,8 @@ async def _read(args: dict[str, Any], workdir: str) -> tuple[str, bool]:
 
     def scan() -> list[str]:
         lines = []
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
+        fd = _open_checked(path, confinement)
+        with open(fd, encoding="utf-8", errors="replace") as handle:
             number = 0
             # readline with a size bound keeps one enormous line from filling memory.
             while line := handle.readline(MAX_LINE_CHARS):
@@ -250,15 +284,21 @@ async def _glob(args: dict[str, Any], workdir: str, timeout: int,
 
     def walk() -> tuple[list[str], bool]:
         found: list[str] = []
-        # A bare name pattern such as "*.md" searches the whole tree.
-        for match in base.rglob(pattern) if "/" not in pattern else base.glob(pattern):
-            if time.monotonic() > deadline:
-                return found, True
-            if confinement is not None and not confinement.allows(match):
-                continue  # a symlink pointing outside the agent's data
-            found.append(str(match))
-            if len(found) > cap:
-                break
+        fd = _open_checked(base, confinement, directory=True)
+        try:
+            # Walk through the opened descriptor, so swapping a folder for a link mid-walk changes nothing.
+            root = Path(f"/proc/self/fd/{fd}")
+            # A bare name pattern such as "*.md" searches the whole tree.
+            for match in root.rglob(pattern) if "/" not in pattern else root.glob(pattern):
+                if time.monotonic() > deadline:
+                    return found, True
+                if confinement is not None and not confinement.allows(match):
+                    continue  # a symlink pointing outside the agent's data
+                found.append(str(base / match.relative_to(root)))
+                if len(found) > cap:
+                    break
+        finally:
+            os.close(fd)
         return found, False
 
     found, timed_out = await asyncio.to_thread(walk)
@@ -268,12 +308,18 @@ async def _glob(args: dict[str, Any], workdir: str, timeout: int,
     return ("\n".join(sorted(found[:cap])) or "no matches") + more, False
 
 
-async def _list(args: dict[str, Any], workdir: str) -> tuple[str, bool]:
+async def _list(args: dict[str, Any], workdir: str, confinement: Confinement | None = None) -> tuple[str, bool]:
     path = _resolve(args.get("path"), workdir)
     if not path.is_dir():
         return f"not a directory: {path}", True
-    entries = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name))
-    shown = [p.name + ("/" if p.is_dir() else "") for p in entries[:500]]
+    fd = _open_checked(path, confinement, directory=True)
+    try:
+        with os.scandir(fd) as scan:
+            entries = sorted(((e.name, e.is_dir(follow_symlinks=False)) for e in scan),
+                             key=lambda e: (not e[1], e[0]))
+    finally:
+        os.close(fd)
+    shown = [name + ("/" if is_dir else "") for name, is_dir in entries[:500]]
     more = f"\n[{len(entries) - 500} more entries]" if len(entries) > 500 else ""
     return "\n".join(shown) + more or "[empty directory]", False
 
@@ -304,21 +350,24 @@ async def _declared(tool: DeclaredTool, args: dict[str, Any], workdir: str, pack
 
 async def run_sandbox_tool(name: str, args: dict[str, Any], *, workdir: str, timeout: int,
                            declared: dict[str, DeclaredTool], package_root: str,
-                           confinement: Confinement | None = None) -> tuple[str, bool]:
+                           confinement: Confinement | None = None,
+                           workspace: str | None = None) -> tuple[str, bool]:
     try:
+        if workspace and confinement is not None:
+            confinement = confinement.for_turn(workspace)
         if name in ("read", "glob", "list") and confinement is not None:
             # These run inside the sandbox server itself, so they get the same path limits a confined call has.
             target = _resolve(args.get("path"), workdir)
             if not confinement.allows(target):
                 return f"{name}: {target} is outside the agent's data", True
         if name == "read":
-            return await _read(args, workdir)
+            return await _read(args, workdir, confinement)
         if name == "grep":
             return await _grep(args, workdir, timeout, confinement)
         if name == "glob":
             return await _glob(args, workdir, timeout, confinement)
         if name == "list":
-            return await _list(args, workdir)
+            return await _list(args, workdir, confinement)
         if name == "bash":
             return await _bash(args, workdir, timeout, confinement)
         if name in declared:
@@ -330,3 +379,19 @@ async def run_sandbox_tool(name: str, args: dict[str, Any], *, workdir: str, tim
     except Exception:  # noqa: BLE001  any other failure becomes a generic tool error, never raw text
         return f"{name} failed", True
     return f"unknown tool {name}", True
+
+
+def end_workspace(confinement: Confinement | None, workspace: str) -> None:
+    if confinement is not None and WORKSPACE_KEY.fullmatch(workspace):
+        shutil.rmtree(confinement.for_turn(workspace).workspace, ignore_errors=True)
+
+
+def sweep_workspaces(confinement: Confinement | None, live: set[str]) -> None:
+    # Remove every workspace whose turn the server is not tracking: ended, past its deadline, or from an earlier
+    # process. The server's own record decides, not file times, which a call can change.
+    if confinement is None:
+        return
+    with contextlib.suppress(OSError), os.scandir(confinement.scratch_root) as entries:
+        for entry in entries:
+            if entry.name.startswith("turn-") and entry.name.removeprefix("turn-") not in live:
+                shutil.rmtree(entry.path, ignore_errors=True)

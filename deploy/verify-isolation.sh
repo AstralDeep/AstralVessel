@@ -77,6 +77,26 @@ check "glob cannot climb out of the agent's data"      probe '
     out, failed = await r.run("glob", {"pattern": "../*"})
     out2, _ = await r.run("glob", {"pattern": "*", "path": "/tmp"})
     return failed and "outside" in out2'
+A=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa; B=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb
+check "calls in one turn share its workspace"          probe "
+    await r.run('bash', {'command': 'echo kept-note > \$TMPDIR/note'}, '$A')
+    out, failed = await r.run('bash', {'command': 'cat \$TMPDIR/note'}, '$A')
+    return out.startswith('kept-note') and not failed"
+check "a call cannot read another turn's workspace"    probe "
+    out, _ = await r.run('bash', {'command': 'cat /tmp/vessel-calls/turn-$A/note; ls /tmp/vessel-calls'}, '$B')
+    out2, failed = await r.run('read', {'path': '/tmp/vessel-calls/turn-$A/note'}, '$B')
+    return 'kept-note' not in out and out.count('Permission denied') >= 2 and failed and 'kept-note' not in out2"
+turns_ended() {
+  probe "
+    await r.end_turn('$A')
+    await r.end_turn('$B')
+    return True" || return 1
+  py $SB 'import glob,sys; sys.exit(1 if glob.glob("/tmp/vessel-calls/turn-*") else 0)'
+}
+check "a turn's workspace is gone once it ends"        turns_ended
+check "the sandbox refuses a malformed workspace key"  probe "
+    out, failed = await r.run('bash', {'command': 'true'}, '../../etc')
+    return failed and 'HTTP 400' in out"
 check "the vessel keeps no conversation store"         py vessel 'import glob,sqlite3,sys
 names = [r[0] for f in glob.glob("/data/*.sqlite") for r in sqlite3.connect(f).execute("select name from sqlite_master where type=\"table\"")]
 sys.exit(0 if names and all(n.startswith("tasks_") for n in names) else 1)'
