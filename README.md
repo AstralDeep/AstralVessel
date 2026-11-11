@@ -222,7 +222,7 @@ cp deploy/.env.example deploy/.env      # fill in the model key, app key and its
 cd deploy
 astralvessel deploy deployment.toml      # (installed as in Develop) writes compose.generated.yml and sandbox tokens
 docker compose -f compose.generated.yml --env-file .env up -d --build
-./verify-isolation.sh                    # 40 isolation probes from inside the containers
+./verify-isolation.sh                    # 41 isolation probes from inside the containers
 set -a; . ./.env; set +a
 for agent in field-guide field-guide-reader; do
   docker run --rm --network astralvessel_front -v "$PWD/../conformance:/conformance:ro" astralvessel:local \
@@ -231,6 +231,12 @@ done                                     # 20 conformance checks per agent
 ```
 
 Sandboxes need a Linux kernel with Landlock ABI 6 or newer (6.12+); without it they refuse to start.
+
+To run a second deployment on the same host, give it its own `project` and front network in `[vessel]`
+(for example `project = "second"`, `front_subnet = "172.31.248.0/24"`, `front_address = "172.31.248.10"`).
+Keep each deployment in its own folder, since its generated secrets sit beside its Compose file. The
+project name prefixes its containers, networks, volumes and locally built images; the conformance run
+above then uses `--network <project>_front` and that deployment's `front_address`.
 
 ## Develop
 

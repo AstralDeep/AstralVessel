@@ -68,11 +68,12 @@ def _source(deployment: Deployment, source: str) -> str:
     return str((deployment.path.parent / source).resolve())
 
 
-def _image(repo_root: Path | None, name: str = "astralvessel") -> dict[str, Any]:
-    # From a checkout, build the images locally; from an installed package, pull the ones released with it.
+def _image(repo_root: Path | None, name: str = "astralvessel", project: str = "astralvessel") -> dict[str, Any]:
+    # From a checkout, build the images locally, tagged per project; from an installed package, pull the released ones.
     if repo_root is None:
         return {"image": published(name)}
-    return {"image": f"{name}:local", "build": {"context": str(repo_root), "dockerfile": "Dockerfile"}}
+    local = project + name.removeprefix("astralvessel")
+    return {"image": f"{local}:local", "build": {"context": str(repo_root), "dockerfile": "Dockerfile"}}
 
 
 def published(name: str) -> str:
@@ -80,6 +81,7 @@ def published(name: str) -> str:
 
 
 def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any]:
+    project = deployment.vessel.project
     vessel_env: dict[str, str] = {
         "VESSEL_DEPLOYMENT": "/deploy/deployment.toml",
         "VESSEL_PACKAGES_ROOT": "/agents",
@@ -98,7 +100,7 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
         if value.startswith("env:"):
             vessel_env[value[4:]] = _env_ref(value)
     services: dict[str, Any] = {
-        "egress": {**HARDENED, **_image(repo_root and repo_root / "egress", "astralvessel-egress"),
+        "egress": {**HARDENED, **_image(repo_root and repo_root / "egress", "astralvessel-egress", project),
                    "environment": {"LLM_BASE_URL": deployment.egress.upstream_url,
                                    "LLM_API_KEY": _env_ref(deployment.egress.upstream_key)},
                    "env_file": [".generated/egress.env"],
@@ -134,11 +136,11 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
         if dockerfile:
             # The agent's own image, built FROM the AstralVessel image (named "astralvessel" in its Dockerfile).
             base = "service:vessel" if repo_root else f"docker-image://{published('astralvessel')}"
-            image = {"image": f"astralvessel-sandbox-{agent_id}:local",
+            image = {"image": f"{project}-sandbox-{agent_id}:local",
                      "build": {"context": str(agent.host_package), "dockerfile": dockerfile,
                                "additional_contexts": {"astralvessel": base}}}
         else:
-            image = _image(repo_root)
+            image = _image(repo_root, project=project)
         services[f"sandbox-{agent_id}"] = {
             **HARDENED, **image,
             "command": ["astralvessel", "sandbox"],
@@ -152,7 +154,7 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
             "labels": {"astralvessel.agent": agent_id, "astralvessel.profile": agent.fingerprint},
         }
     services["vessel"] = {
-        **HARDENED, **_image(repo_root),
+        **HARDENED, **_image(repo_root, project=project),
         "environment": vessel_env,
         "env_file": [".generated/vessel.env"],
         "volumes": vessel_volumes,
@@ -169,7 +171,7 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
         for mount in agent.profile.mounts:
             if mount.source.startswith("volume:"):
                 volumes[mount.source[7:]] = {"external": True}
-    return {"name": "astralvessel", "services": services, "networks": networks, "volumes": volumes}
+    return {"name": project, "services": services, "networks": networks, "volumes": volumes}
 
 
 def inputs_hash(deployment: Deployment) -> str:
@@ -179,6 +181,12 @@ def inputs_hash(deployment: Deployment) -> str:
 
 
 def write(deployment: Deployment, out: Path, *, repo_root: Path | None, master_token: str) -> list[Path]:
+    # The secrets folder sits beside the Compose file, so two deployments must not share a folder.
+    if out.exists():
+        lines = out.read_text().splitlines()
+        named = next((line[6:].strip().strip("\"'") for line in lines if line.startswith("name: ")), None)
+        if named and named != deployment.vessel.project:
+            raise SystemExit(f"{out} belongs to project {named!r}; give each deployment its own folder, or --out")
     secrets = out.parent / ".generated"
     secrets.mkdir(mode=0o700, exist_ok=True)
     (secrets / ".gitignore").write_text("*\n")
