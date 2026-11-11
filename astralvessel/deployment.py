@@ -161,11 +161,13 @@ class Agent(BaseModel):
 
     @property
     def fingerprint(self) -> str:
-        # Everything that shapes the sandbox container; a change means the operator must redeploy it.
+        # Everything that shapes the sandbox container, plus the manifest and declared tools that the vessel and
+        # the sandbox load once at start (prompt files are read every turn); a change means a redeploy.
         sandbox = self.package.manifest.sandbox.model_dump()
         dockerfile = self.package.manifest.sandbox.dockerfile
         image = build_inputs_hash(self.package.root, dockerfile) if dockerfile else None
-        body = {"id": self.id, "profile": self.profile.model_dump(), "needs": sandbox, "image": image, "schema": 1}
+        body = {"id": self.id, "profile": self.profile.model_dump(), "needs": sandbox, "image": image,
+                "loaded": self.package.loaded_digest(), "schema": 2}
         return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:16]
 
 
