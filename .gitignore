@@ -33,3 +33,6 @@ __pycache__/
 *.sqlite
 *.sqlite-*
 vessel-data/
+# Documentation build output and its throwaway environment
+site/
+.venv-docs/

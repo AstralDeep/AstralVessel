@@ -10,6 +10,8 @@ It is built on the same design as [Astral](https://github.com/AstralDeep)'s harn
 separate implementation an application can use without running a full Astral instance. It is not code
 taken from AstralDeep.
 
+**Documentation:** <https://astraldeep.github.io/AstralVessel/>
+
 ![Diagram: on the left, a full Astral instance with its web, Windows, Android and Apple clients, accounts and sign-in, an agent catalog of many agents, and a highlighted harness and sandbox. On the right, one app such as a team's web app, using AstralVessel for its agents: an agent folder (vessel.toml, prompt.md, tools/) plus a harness, sandbox and egress. A solid arrow from left to right reads "used on its own"; a dashed arrow back reads "could slot back in later".](https://raw.githubusercontent.com/AstralDeep/AstralVessel/main/assets/lifted-out.svg)
 
 ## Why it exists
@@ -278,7 +280,8 @@ its own process, unconfined. That mode is for tests only: never point a model at
   as a dry run, then push the tag `v<version>` on `main`. It publishes the images, waits for a
   maintainer's approval of the `pypi` environment, checks the images are public, then publishes the
   package.
-- This README is the only document. Update it in the same pull request when behavior changes.
+- The documentation lives in `docs/` (built with MkDocs). Update it, and this README where it applies, in the same
+  pull request when behavior changes.
 
 ## Status
 
