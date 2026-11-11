@@ -6,7 +6,7 @@ import asyncio
 import logging
 import re
 import socket
-from typing import Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
 from urllib.parse import urlsplit
 
 from egress.app import Forbidden, resolve_public
@@ -27,7 +27,9 @@ async def _default_connect(ip: str, port: int):
 
 async def _reply(writer: asyncio.StreamWriter, status: int, reason: str) -> None:
     body = f"{reason}\n".encode()
-    writer.write(f"HTTP/1.1 {status} {reason}\r\nContent-Type: text/plain\r\nContent-Length: {len(body)}\r\nConnection: close\r\n\r\n".encode() + body)
+    head = (f"HTTP/1.1 {status} {reason}\r\nContent-Type: text/plain\r\nContent-Length: {len(body)}\r\n"
+            "Connection: close\r\n\r\n")
+    writer.write(head.encode() + body)
     await writer.drain()
     writer.close()
 
@@ -44,7 +46,7 @@ async def _pipe(src: asyncio.StreamReader, dst: asyncio.StreamWriter, budget: li
                 break
             dst.write(chunk)
             await dst.drain()
-    except (asyncio.TimeoutError, ConnectionError, asyncio.IncompleteReadError):
+    except (TimeoutError, ConnectionError, asyncio.IncompleteReadError):
         pass
     finally:
         try:
@@ -58,7 +60,7 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter, *,
     peer = writer.get_extra_info("peername")
     try:
         head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 15.0)
-    except (asyncio.TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):
+    except (TimeoutError, asyncio.IncompleteReadError, asyncio.LimitOverrunError):
         writer.close()
         return
     lines = head.split(b"\r\n")

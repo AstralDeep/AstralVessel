@@ -90,5 +90,11 @@ check "egress proxy refuses private addresses"          refused 10.0.0.1:443
 check "egress proxy refuses Tailscale addresses"        refused 100.100.100.100:443
 check "egress proxy refuses odd ports"                  refused example.com:22
 check "egress proxy allows a public site on 443"        proxy example.com:443
+search_reach() { dc exec -T search /usr/local/searxng/.venv/bin/python -c "$CONNECT" "$1" "$2"; }
+search_not_reach() { ! search_reach "$@"; }
+check "sandbox cannot reach the search service"         not_reach $SB search 8080
+check "search has no direct route to the internet"      search_not_reach 1.1.1.1 443
+check "search cannot reach the harness API"             search_not_reach 172.31.247.10 8700
+check "harness reaches the search service"              reach vessel search 8080
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]

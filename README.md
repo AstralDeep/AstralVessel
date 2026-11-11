@@ -173,7 +173,7 @@ cp deploy/.env.example deploy/.env      # fill in the model key, app key and its
 cd deploy
 astralvessel deploy deployment.toml      # (installed as in Develop) writes compose.generated.yml and sandbox tokens
 docker compose -f compose.generated.yml --env-file .env up -d --build
-./verify-isolation.sh                    # 28 isolation probes from inside the containers
+./verify-isolation.sh                    # 32 isolation probes from inside the containers
 set -a; . ./.env; set +a
 for agent in field-guide field-guide-reader; do
   docker run --rm --network astralvessel_front -v "$PWD/../conformance:/conformance:ro" astralvessel:local \
@@ -195,6 +195,23 @@ uv pip install -e ../AstralDeep/components/AstralPrimitives      # optional: val
 The vessel refuses to start without sandboxes unless `VESSEL_DEV_UNSANDBOXED=1`, which runs tools in
 its own process, unconfined. That mode is for tests only: never point a model at it.
 
+## Contributing
+
+- Work on a branch named for the change and open a pull request against `main`. CI (lint, tests on
+  Python 3.11 and 3.12, and isolation probes on the running example) must pass, and a maintainer
+  reviews before it merges.
+- Before pushing, run `ruff check .` and `.venv/bin/python -m pytest -q`. Add a test with each fix
+  or feature.
+- AstralVessel stays application-neutral: no code, examples, prompts or docs about a particular
+  application that uses it. An application's own agents live in that application's repo.
+- Never commit secrets, `.env` files, or generated Compose output (`deploy/compose.generated.yml`,
+  `deploy/.generated/`).
+- CI also starts the example deployment and runs `verify-isolation.sh` against it. The conformance
+  checks need a real model, so a change to the agent loop, the A2A interface, the sandbox or the
+  web tools also needs them run by hand (the steps in "Run the example"), all passing. Say in the
+  pull request that they passed.
+- This README is the only document. Update it in the same pull request when behavior changes.
+
 ## Status
 
 Version 0.4, November 2026. Done:
@@ -211,6 +228,7 @@ Version 0.4, November 2026. Done:
 - a task store that survives restarts, owner binding, cancellation, and AstralPrimitives output
 - unit and service tests, isolation probes, conformance checks, a load test, and an independent
   security review
+- CI on every pull request: lint, tests, image builds, and isolation probes on a running deployment
 
 Load test, in one process on one core with a fake model (the load generator shares that core): 50
 concurrent users, three turns each, every turn sending a 1,000-message history, running a confined

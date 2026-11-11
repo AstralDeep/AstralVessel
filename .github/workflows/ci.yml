@@ -1,0 +1,88 @@
+# Lint, the test suite on each supported Python, and isolation probes against the example deployment built from
+# this commit, on every pull request and every push to main. It needs no secrets: the tests use a scripted model and
+# the deployment throwaway keys. Conformance needs a real model, so it stays a maintainer step (README, Contributing).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ASTRALPRIMS: "astralprims @ git+https://github.com/AstralDeep/AstralPrimitives@d7b454105ec910cb1734fab6f7e318ac29185873"
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: pip install ruff==0.17.4
+      - run: ruff check .
+
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: ${{ matrix.python }}
+      - run: sudo apt-get update -q && sudo apt-get install -y --no-install-recommends ripgrep
+      - run: pip install -e . pytest==9.2.0 pytest-asyncio==1.4.1.post1 "$ASTRALPRIMS"
+      - run: python -m pytest -q -rs
+
+  isolation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - name: Start the example deployment with placeholder keys
+        working-directory: deploy
+        run: |
+          python - > .env <<'PY'
+          import hashlib, secrets
+          app = secrets.token_urlsafe(32)
+          print(f"VESSEL_UPSTREAM_MODEL_KEY=ci\nVESSEL_APP_KEY={app}")
+          print(f"VESSEL_APP_KEY_SHA256={hashlib.sha256(app.encode()).hexdigest()}")
+          print(f"VESSEL_SANDBOX_TOKEN={secrets.token_urlsafe(32)}")
+          PY
+          astralvessel deploy deployment.toml
+          docker compose -f compose.generated.yml --env-file .env up -d --build
+          for i in $(seq 60); do
+            [ "$(docker compose -f compose.generated.yml --env-file .env logs vessel | grep -c 'sandbox is ready')" -ge 2 ] && exit 0
+            sleep 5
+          done
+          docker compose -f compose.generated.yml --env-file .env logs
+          exit 1
+      - name: Isolation probes
+        working-directory: deploy
+        run: ./verify-isolation.sh
+      - name: Logs on failure
+        if: failure()
+        working-directory: deploy
+        run: docker compose -f compose.generated.yml --env-file .env logs --tail 50
