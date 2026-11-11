@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ASTRALPRIMS: "astralprims @ git+https://github.com/AstralDeep/AstralPrimitives@d7b454105ec910cb1734fab6f7e318ac29185873"
+  ASTRALPRIMS: "astralprims==0.12.0"
 
 jobs:
   lint:

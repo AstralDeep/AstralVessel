@@ -10,7 +10,7 @@ It is built on the same design as [Astral](https://github.com/AstralDeep)'s harn
 separate implementation an application can use without running a full Astral instance. It is not code
 taken from AstralDeep.
 
-![Diagram: on the left, a full Astral instance with its web, Windows, Android and Apple clients, accounts and sign-in, an agent catalog of many agents, and a highlighted harness and sandbox. On the right, one app such as a team's web app, using AstralVessel for its agents: an agent folder (vessel.toml, prompt.md, tools/) plus a harness, sandbox and egress. A solid arrow from left to right reads "used on its own"; a dashed arrow back reads "could slot back in later".](assets/lifted-out.svg)
+![Diagram: on the left, a full Astral instance with its web, Windows, Android and Apple clients, accounts and sign-in, an agent catalog of many agents, and a highlighted harness and sandbox. On the right, one app such as a team's web app, using AstralVessel for its agents: an agent folder (vessel.toml, prompt.md, tools/) plus a harness, sandbox and egress. A solid arrow from left to right reads "used on its own"; a dashed arrow back reads "could slot back in later".](https://raw.githubusercontent.com/AstralDeep/AstralVessel/main/assets/lifted-out.svg)
 
 ## Why it exists
 
@@ -54,7 +54,7 @@ tools, each a small TOML file. A deployment file (`deployment.toml`) lists the a
 serves, the sandbox and services each one gets, and which applications may call which agents. The
 agent declares what it needs; the deployment file is the only place access is granted.
 
-![Diagram of who holds what. The app holds its key and its users' conversation history, names each user with X-Vessel-User, and is also on an outside network for its users' browsers. It calls the vessel over A2A 1.0. The vessel serves every agent and runs the agent loop; it holds only runs in flight, never conversation history or the model key. It calls each agent's sandbox over /run (HTTP); there is one sandbox per agent, which runs the tools on read-only data and never has network, secrets, history, or a route to the vessel's API. The vessel reaches the egress over the OpenAI-compatible API, which is also the web proxy for webfetch and websearch. The egress holds the model key, reaches only public addresses on ports 80 and 443, and calls the model over HTTPS: GLM 5.3 on the UK LLM Factory, or any OpenAI-compatible model. Everything except the egress's outbound link and the app's browser-facing side sits on internal Docker networks with no route out.](assets/who-holds-what.svg)
+![Diagram of who holds what. The app holds its key and its users' conversation history, names each user with X-Vessel-User, and is also on an outside network for its users' browsers. It calls the vessel over A2A 1.0. The vessel serves every agent and runs the agent loop; it holds only runs in flight, never conversation history or the model key. It calls each agent's sandbox over /run (HTTP); there is one sandbox per agent, which runs the tools on read-only data and never has network, secrets, history, or a route to the vessel's API. The vessel reaches the egress over the OpenAI-compatible API, which is also the web proxy for webfetch and websearch. The egress holds the model key, reaches only public addresses on ports 80 and 443, and calls the model over HTTPS: GLM 5.3 on the UK LLM Factory, or any OpenAI-compatible model. Everything except the egress's outbound link and the app's browser-facing side sits on internal Docker networks with no route out.](https://raw.githubusercontent.com/AstralDeep/AstralVessel/main/assets/who-holds-what.svg)
 
 - **The app** authenticates with its own key, which the deployment limits to certain agents, and names
   each end user with an `X-Vessel-User` header. An orchestrator with an identity provider (such as
@@ -92,6 +92,23 @@ Compose file, the operator starts it, and the vessel serves an agent only once i
 it is confined and was started from the current deployment file (a profile fingerprint set at deploy
 time, so an edited deployment that was not redeployed is caught). Applications join the vessel's
 `front` network to reach it, and to receive its service calls.
+
+## What it protects, and what it trusts
+
+AstralVessel assumes the model, and everything the model reads (web pages, data, tool output), may be
+hostile: a prompt injection can make the agent try anything its tools allow. Against that it keeps:
+
+- the model key in the egress alone, and app keys as hashes in the vessel;
+- conversation history with the application, never in the vessel or a sandbox;
+- data read-only, each sandbox off every network, and each call out of other calls' files and processes;
+- each user's tasks bound to their owner, and each app limited to the agents it was granted;
+- outbound traffic to public addresses on ports 80 and 443 only.
+
+It trusts the operator and the host's kernel and Docker, the application to name its users honestly (or
+the token issuers the deployment lists), and the model provider and search engines with what is sent to
+them. Out of scope: kernel or container escapes, and what the agent says in its answer. An agent can
+pass anything it may read to its user, and with web tools it can send it to any public site, so give web
+tools only to agents whose data may leave.
 
 ## Calling an agent
 
@@ -166,6 +183,17 @@ tools' scopes as a `scope:` tag Astral reads.
 | `stress/load.py` | A load test: many concurrent users, long histories, cancellations and flooding tool output |
 | `tests/` | Unit and service tests with a scripted model |
 
+## Install
+
+```bash
+pip install astralvessel                 # or: uv tool install astralvessel
+astralvessel deploy deployment.toml      # writes compose.generated.yml for your deployment file
+```
+
+An installed copy deploys the images released with it, `ghcr.io/astraldeep/astralvessel` and
+`ghcr.io/astraldeep/astralvessel-egress` (amd64 and arm64); a checkout builds them from source. Both
+need Docker with Compose.
+
 ## Run the example
 
 ```bash
@@ -187,7 +215,7 @@ Sandboxes need a Linux kernel with Landlock ABI 6 or newer (6.12+); without it t
 
 ```bash
 uv venv -p 3.11 && uv pip install -e . pytest pytest-asyncio ruff
-uv pip install -e ../AstralDeep/components/AstralPrimitives      # optional: validates primitives
+uv pip install astralprims                                       # optional: validates primitives
 .venv/bin/python -m pytest -q
 .venv/bin/python stress/load.py --users 50 --turns 3 --history 1000 --cancels 20
 ```
@@ -210,11 +238,13 @@ its own process, unconfined. That mode is for tests only: never point a model at
   checks need a real model, so a change to the agent loop, the A2A interface, the sandbox or the
   web tools also needs them run by hand (the steps in "Run the example"), all passing. Say in the
   pull request that they passed.
+- Releases: bump `version` in `pyproject.toml` on `main`, then push the tag `v<version>`; the release
+  workflow publishes the images and the package.
 - This README is the only document. Update it in the same pull request when behavior changes.
 
 ## Status
 
-Version 0.4, November 2026. Done:
+Version 0.4.0, November 2026, on PyPI as `astralvessel`. Done:
 
 - one vessel serving many agents, each with its own sandbox, card and A2A address
 - `deployment.toml`, per-app keys, and Compose generated by `astralvessel deploy`
@@ -229,6 +259,7 @@ Version 0.4, November 2026. Done:
 - unit and service tests, isolation probes, conformance checks, a load test, and an independent
   security review
 - CI on every pull request: lint, tests, image builds, and isolation probes on a running deployment
+- releases from a version tag: multi-architecture images and the PyPI package
 
 Load test, in one process on one core with a fake model (the load generator shares that core): 50
 concurrent users, three turns each, every turn sending a 1,000-message history, running a confined

@@ -1,6 +1,7 @@
 # AstralVessel egress: model passthrough (holds the API key) on :8080 and the guarded web proxy on :3128.
 # Runs unprivileged on a read-only filesystem; compose gives it the only route out.
 FROM python:3.12-slim
+LABEL org.opencontainers.image.source="https://github.com/AstralDeep/AstralVessel"
 
 WORKDIR /app
 COPY requirements.txt .
