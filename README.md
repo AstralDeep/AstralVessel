@@ -234,7 +234,9 @@ Sandboxes need a Linux kernel with Landlock ABI 6 or newer (6.12+); without it t
 
 To run a second deployment on the same host, give it its own `project` and front network in `[vessel]`
 (for example `project = "second"`, `front_subnet = "172.31.248.0/24"`, `front_address = "172.31.248.10"`).
-The project name prefixes its containers, networks, volumes and sandbox images.
+Keep each deployment in its own folder, since its generated secrets sit beside its Compose file. The
+project name prefixes its containers, networks, volumes and locally built images; the conformance run
+above then uses `--network <project>_front` and that deployment's `front_address`.
 
 ## Develop
 
