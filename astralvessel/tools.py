@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import errno
 import json
 import os
 import re
 import shutil
+import stat
 import sys
 import tempfile
 import time
@@ -196,7 +198,23 @@ async def _collect(proc: asyncio.subprocess.Process, stdin: bytes | None) -> byt
     return b"".join(chunks)
 
 
-async def _read(args: dict[str, Any], workdir: str) -> tuple[str, bool]:
+def _open_checked(path: Path, confinement: Confinement | None, *, directory: bool = False) -> int:
+    # Open first, then check where the descriptor really points: a call can swap links in its workspace
+    # between a path check and the open, and these tools run in the unconfined server.
+    fd = os.open(path, os.O_RDONLY | os.O_NONBLOCK | (os.O_DIRECTORY if directory else 0))
+    try:
+        real = os.readlink(f"/proc/self/fd/{fd}")
+        if confinement is not None and not confinement.allows(Path(real)):
+            raise PermissionError(errno.EACCES, "outside the agent's data")
+        if not directory and not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise IsADirectoryError(errno.EISDIR, "not a regular file")
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+async def _read(args: dict[str, Any], workdir: str, confinement: Confinement | None = None) -> tuple[str, bool]:
     path = _resolve(args.get("path"), workdir)
     if not path.is_file():
         return f"not a file: {path}", True
@@ -205,7 +223,8 @@ async def _read(args: dict[str, Any], workdir: str) -> tuple[str, bool]:
 
     def scan() -> list[str]:
         lines = []
-        with path.open("r", encoding="utf-8", errors="replace") as handle:
+        fd = _open_checked(path, confinement)
+        with open(fd, encoding="utf-8", errors="replace") as handle:
             number = 0
             # readline with a size bound keeps one enormous line from filling memory.
             while line := handle.readline(MAX_LINE_CHARS):
@@ -265,15 +284,21 @@ async def _glob(args: dict[str, Any], workdir: str, timeout: int,
 
     def walk() -> tuple[list[str], bool]:
         found: list[str] = []
-        # A bare name pattern such as "*.md" searches the whole tree.
-        for match in base.rglob(pattern) if "/" not in pattern else base.glob(pattern):
-            if time.monotonic() > deadline:
-                return found, True
-            if confinement is not None and not confinement.allows(match):
-                continue  # a symlink pointing outside the agent's data
-            found.append(str(match))
-            if len(found) > cap:
-                break
+        fd = _open_checked(base, confinement, directory=True)
+        try:
+            # Walk through the opened descriptor, so swapping a folder for a link mid-walk changes nothing.
+            root = Path(f"/proc/self/fd/{fd}")
+            # A bare name pattern such as "*.md" searches the whole tree.
+            for match in root.rglob(pattern) if "/" not in pattern else root.glob(pattern):
+                if time.monotonic() > deadline:
+                    return found, True
+                if confinement is not None and not confinement.allows(match):
+                    continue  # a symlink pointing outside the agent's data
+                found.append(str(base / match.relative_to(root)))
+                if len(found) > cap:
+                    break
+        finally:
+            os.close(fd)
         return found, False
 
     found, timed_out = await asyncio.to_thread(walk)
@@ -283,12 +308,18 @@ async def _glob(args: dict[str, Any], workdir: str, timeout: int,
     return ("\n".join(sorted(found[:cap])) or "no matches") + more, False
 
 
-async def _list(args: dict[str, Any], workdir: str) -> tuple[str, bool]:
+async def _list(args: dict[str, Any], workdir: str, confinement: Confinement | None = None) -> tuple[str, bool]:
     path = _resolve(args.get("path"), workdir)
     if not path.is_dir():
         return f"not a directory: {path}", True
-    entries = sorted(path.iterdir(), key=lambda p: (not p.is_dir(), p.name))
-    shown = [p.name + ("/" if p.is_dir() else "") for p in entries[:500]]
+    fd = _open_checked(path, confinement, directory=True)
+    try:
+        with os.scandir(fd) as scan:
+            entries = sorted(((e.name, e.is_dir(follow_symlinks=False)) for e in scan),
+                             key=lambda e: (not e[1], e[0]))
+    finally:
+        os.close(fd)
+    shown = [name + ("/" if is_dir else "") for name, is_dir in entries[:500]]
     more = f"\n[{len(entries) - 500} more entries]" if len(entries) > 500 else ""
     return "\n".join(shown) + more or "[empty directory]", False
 
@@ -330,13 +361,13 @@ async def run_sandbox_tool(name: str, args: dict[str, Any], *, workdir: str, tim
             if not confinement.allows(target):
                 return f"{name}: {target} is outside the agent's data", True
         if name == "read":
-            return await _read(args, workdir)
+            return await _read(args, workdir, confinement)
         if name == "grep":
             return await _grep(args, workdir, timeout, confinement)
         if name == "glob":
             return await _glob(args, workdir, timeout, confinement)
         if name == "list":
-            return await _list(args, workdir)
+            return await _list(args, workdir, confinement)
         if name == "bash":
             return await _bash(args, workdir, timeout, confinement)
         if name in declared:
@@ -355,13 +386,12 @@ def end_workspace(confinement: Confinement | None, workspace: str) -> None:
         shutil.rmtree(confinement.for_turn(workspace).workspace, ignore_errors=True)
 
 
-def sweep_workspaces(confinement: Confinement | None, max_age_seconds: float) -> None:
-    # A workspace outlives its turn only if the vessel died before ending it; no turn runs past its deadline.
+def sweep_workspaces(confinement: Confinement | None, live: set[str]) -> None:
+    # Remove every workspace whose turn the server is not tracking: ended, past its deadline, or from an earlier
+    # process. The server's own record decides, not file times, which a call can change.
     if confinement is None:
         return
-    cutoff = time.time() - max_age_seconds
     with contextlib.suppress(OSError), os.scandir(confinement.scratch_root) as entries:
         for entry in entries:
-            with contextlib.suppress(OSError):
-                if entry.name.startswith("turn-") and entry.stat(follow_symlinks=False).st_mtime < cutoff:
-                    shutil.rmtree(entry.path, ignore_errors=True)
+            if entry.name.startswith("turn-") and entry.name.removeprefix("turn-") not in live:
+                shutil.rmtree(entry.path, ignore_errors=True)

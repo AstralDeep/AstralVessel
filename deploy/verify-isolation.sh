@@ -85,7 +85,7 @@ check "calls in one turn share its workspace"          probe "
 check "a call cannot read another turn's workspace"    probe "
     out, _ = await r.run('bash', {'command': 'cat /tmp/vessel-calls/turn-$A/note; ls /tmp/vessel-calls'}, '$B')
     out2, failed = await r.run('read', {'path': '/tmp/vessel-calls/turn-$A/note'}, '$B')
-    return 'kept-note' not in out and 'Permission denied' in out and failed and 'kept-note' not in out2"
+    return 'kept-note' not in out and out.count('Permission denied') >= 2 and failed and 'kept-note' not in out2"
 turns_ended() {
   probe "
     await r.end_turn('$A')
