@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import stat
 from importlib.metadata import version
 
@@ -66,6 +67,37 @@ def test_the_fingerprint_follows_the_sandbox_profile(data_package, tmp_path):
     path.write_text(deployment_text(data_package).replace('source = "env:DATA_DIR"', 'source = "/other"'))
     assert load_deployment(path).agents["guide"].fingerprint != before
     assert sandbox_token("m" * 16, "a") != sandbox_token("m" * 16, "b")
+
+
+def test_an_edited_manifest_tool_or_deployment_recreates_what_loads_it(data_package, tmp_path):
+    path = tmp_path / "deployment.toml"
+    path.write_text(deployment_text(data_package))
+
+    def services():
+        spec = generate(load_deployment(path), repo_root=None)["services"]
+        sandbox = spec["sandbox-guide"]["environment"]["VESSEL_PROFILE_HASH"]
+        return spec["vessel"]["labels"]["astralvessel.inputs"], sandbox
+
+    first = services()
+    # The vessel loads the package from its own mount; the same files must give the same fingerprint there.
+    mount = tmp_path / "mount"
+    shutil.copytree(data_package, mount / "guide")
+    assert load_deployment(path, packages_root=str(mount)).agents["guide"].fingerprint == first[1]
+    (data_package / "prompt.md").write_text("A new briefing, read on the next turn.")
+    (data_package / "notes.md~").write_text("an editor backup")
+    assert services() == first
+    tool = data_package / "tools" / "echo.toml"
+    tool.write_text(tool.read_text().replace("Echo the input", "Echo the input back"))
+    edited = services()
+    assert edited[0] != first[0] and edited[1] != first[1]
+    (data_package / "tools" / "rank.toml").write_text(tool.read_text().replace('name = "echo"', 'name = "rank"'))
+    manifest = data_package / "vessel.toml"
+    manifest.write_text(manifest.read_text().replace('"tools/echo.toml"]', '"tools/echo.toml", "tools/rank.toml"]'))
+    added = services()
+    assert added[0] != edited[0] and added[1] != edited[1]
+    path.write_text(path.read_text() + "\n# comment\n")
+    redeployed = services()
+    assert redeployed[0] != added[0] and redeployed[1] == added[1]
 
 
 def test_compose_isolates_each_sandbox_and_keeps_secrets_out(data_package, tmp_path):

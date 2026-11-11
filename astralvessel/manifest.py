@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import tomllib
 from pathlib import Path
 from typing import Any, Literal
@@ -116,6 +118,12 @@ class AgentPackage(BaseModel):
                 if name == "prompt.md":
                     parts.append(self.prompt.strip())  # the copy read at startup
         return "\n\n".join(p for p in parts if p)
+
+    def loaded_digest(self) -> str:
+        # The manifest and declared tools as loaded at start (the model key left out); prompts are read per turn.
+        body = {"manifest": self.manifest.model_dump(mode="json", exclude={"model": {"api_key"}}),
+                "declared": [tool.model_dump(mode="json") for tool in self.declared]}
+        return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:16]
 
     def services(self) -> set[str]:
         return {t.service for t in self.declared if t.service}
