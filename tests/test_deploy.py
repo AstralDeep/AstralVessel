@@ -6,6 +6,7 @@ import asyncio
 import os
 import shutil
 import stat
+from importlib.metadata import version
 
 import pytest
 
@@ -117,6 +118,12 @@ def test_compose_isolates_each_sandbox_and_keeps_secrets_out(data_package, tmp_p
     assert search["networks"] == ["egress"] and "ports" not in search and search["read_only"]
     assert search["cap_drop"] == ["ALL"] and vessel["environment"]["VESSEL_SEARCH_URL"] == "http://search:8080"
     assert "search" in vessel["depends_on"]
+    released = version("astralvessel")
+    assert vessel["image"] == f"ghcr.io/astraldeep/astralvessel:{released}" and "build" not in vessel
+    assert spec["services"]["egress"]["image"] == f"ghcr.io/astraldeep/astralvessel-egress:{released}"
+    built = generate(deployment, repo_root=tmp_path)["services"]
+    assert built["vessel"]["image"] == "astralvessel:local" and built["vessel"]["build"]["context"] == str(tmp_path)
+    assert built["egress"]["build"]["context"] == str(tmp_path / "egress")
     assert "VESSEL_MODEL_KEY" not in vessel["environment"] and vessel["env_file"] == [".generated/vessel.env"]
     assert spec["services"]["egress"]["env_file"] == [".generated/egress.env"]
     assert search["env_file"] == [".generated/search.env"]

@@ -7,12 +7,14 @@ import hashlib
 import json
 import os
 import secrets as tokens
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
 from .deployment import Deployment, egress_token, sandbox_token
 
 IMAGE = "astralvessel:local"
+REGISTRY = "ghcr.io/astraldeep"
 SANDBOX_PORT = 8710
 SEARXNG_IMAGE = "searxng/searxng:2026.10.25-54ca1d9cf"
 # JSON answers only, no rate limiter or image proxy (one private caller), every request through the egress, and
@@ -66,10 +68,15 @@ def _source(deployment: Deployment, source: str) -> str:
     return str((deployment.path.parent / source).resolve())
 
 
-def _image(repo_root: Path | None, dockerfile: str = "Dockerfile", tag: str = IMAGE) -> dict[str, Any]:
+def _image(repo_root: Path | None, name: str = "astralvessel") -> dict[str, Any]:
+    # From a checkout, build the images locally; from an installed package, pull the ones released with it.
     if repo_root is None:
-        return {"image": tag}
-    return {"image": tag, "build": {"context": str(repo_root), "dockerfile": dockerfile}}
+        return {"image": published(name)}
+    return {"image": f"{name}:local", "build": {"context": str(repo_root), "dockerfile": "Dockerfile"}}
+
+
+def published(name: str) -> str:
+    return f"{REGISTRY}/{name}:{version('astralvessel')}"
 
 
 def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any]:
@@ -91,7 +98,7 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
         if value.startswith("env:"):
             vessel_env[value[4:]] = _env_ref(value)
     services: dict[str, Any] = {
-        "egress": {**HARDENED, **_image(repo_root and repo_root / "egress", tag="astralvessel-egress:local"),
+        "egress": {**HARDENED, **_image(repo_root and repo_root / "egress", "astralvessel-egress"),
                    "environment": {"LLM_BASE_URL": deployment.egress.upstream_url,
                                    "LLM_API_KEY": _env_ref(deployment.egress.upstream_key)},
                    "env_file": [".generated/egress.env"],
@@ -126,7 +133,7 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
         dockerfile = agent.package.manifest.sandbox.dockerfile
         if dockerfile:
             # The agent's own image, built FROM the AstralVessel image (named "astralvessel" in its Dockerfile).
-            base = "service:vessel" if repo_root else f"docker-image://{IMAGE}"
+            base = "service:vessel" if repo_root else f"docker-image://{published('astralvessel')}"
             image = {"image": f"astralvessel-sandbox-{agent_id}:local",
                      "build": {"context": str(agent.host_package), "dockerfile": dockerfile,
                                "additional_contexts": {"astralvessel": base}}}
