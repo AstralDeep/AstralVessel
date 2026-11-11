@@ -101,19 +101,20 @@ check "a file a call writes to its outbox reaches the vessel" probe "
     got = r.take_files('$C')
     await r.end_turn('$C')
     return not failed and [(f.name, f.data) for f in got] == [('t.csv', b'a,b\\n1,2\\n')]"
+D=dddddddddddddddddddddddddddddddd; E=eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee  # an ended turn's key is refused
 check "the outbox refuses other types, big files and links" probe "
     r.file_types = ['csv', 'png']
     cmd = ('head -c 5000000 /dev/zero | tr \x27\\\\0\x27 a > \$VESSEL_OUTBOX/big.csv; echo x > \$VESSEL_OUTBOX/run.sh; '
            'ln -s /etc/passwd \$VESSEL_OUTBOX/p.csv; printf x > \$VESSEL_OUTBOX/fake.png')
-    out, _ = await r.run('bash', {'command': cmd}, '$C')
-    got = r.take_files('$C')
-    await r.end_turn('$C')
+    out, _ = await r.run('bash', {'command': cmd}, '$D')
+    got = r.take_files('$D')
+    await r.end_turn('$D')
     return got == [] and out.count('[not attached') == 4 and 'root:' not in out"
 check "an outbox swapped for a link exposes nothing" probe "
     r.file_types = ['csv']
-    out, _ = await r.run('bash', {'command': 'rmdir \$VESSEL_OUTBOX && ln -s /etc \$VESSEL_OUTBOX'}, '$C')
-    got = r.take_files('$C')
-    await r.end_turn('$C')
+    out, _ = await r.run('bash', {'command': 'rmdir \$VESSEL_OUTBOX && ln -s /etc \$VESSEL_OUTBOX'}, '$E')
+    got = r.take_files('$E')
+    await r.end_turn('$E')
     return got == [] and 'not a folder' in out"
 check "the sandbox refuses a malformed workspace key"  probe "
     out, failed = await r.run('bash', {'command': 'true'}, '../../etc')
