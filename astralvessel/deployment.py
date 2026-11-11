@@ -251,3 +251,8 @@ def resolve(value: str) -> str:
 def sandbox_token(master: str, agent_id: str) -> str:
     # Each sandbox gets its own token, derived from one master secret the vessel holds.
     return hmac.new(master.encode(), f"sandbox:{agent_id}".encode(), hashlib.sha256).hexdigest()
+
+
+def egress_token(master: str) -> str:
+    # The vessel's token for the egress model passthrough, so nothing else on the egress network can spend the key.
+    return hmac.new(master.encode(), b"egress:model", hashlib.sha256).hexdigest()

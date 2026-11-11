@@ -10,7 +10,7 @@ import pytest
 
 from astralvessel import confine
 from astralvessel.compose import generate, write
-from astralvessel.deployment import load_deployment, sandbox_token
+from astralvessel.deployment import egress_token, load_deployment, sandbox_token
 from astralvessel.sandbox import LocalRunner, confinement_for
 from astralvessel.transcript import TranscriptError, parse_history
 
@@ -85,6 +85,9 @@ def test_compose_isolates_each_sandbox_and_keeps_secrets_out(data_package, tmp_p
     assert search["networks"] == ["egress"] and "ports" not in search and search["read_only"]
     assert search["cap_drop"] == ["ALL"] and vessel["environment"]["VESSEL_SEARCH_URL"] == "http://search:8080"
     assert "search" in vessel["depends_on"]
+    assert "VESSEL_MODEL_KEY" not in vessel["environment"] and vessel["env_file"] == [".generated/vessel.env"]
+    assert spec["services"]["egress"]["env_file"] == [".generated/egress.env"]
+    assert search["env_file"] == [".generated/search.env"]
     shared = 'mounts = [{ target = "/data", source = "volume:shared-corpus" }]'
     path.write_text(deployment_text(data_package, mounts=shared))
     named = generate(load_deployment(path), repo_root=None)
@@ -97,6 +100,12 @@ def test_compose_isolates_each_sandbox_and_keeps_secrets_out(data_package, tmp_p
     secret = tmp_path / ".generated" / "sandbox-guide.env"
     assert stat.S_IMODE(os.stat(secret).st_mode) == 0o600
     assert sandbox_token(master, "guide") in secret.read_text()
+    token = egress_token(master)
+    assert token not in (sandbox_token(master, "guide"), sandbox_token(master, "egress:model")) and token != master
+    for name, line in (("egress", "EGRESS_TOKEN"), ("vessel", "VESSEL_MODEL_KEY")):
+        held = tmp_path / ".generated" / f"{name}.env"
+        assert stat.S_IMODE(os.stat(held).st_mode) == 0o600 and held.read_text() == f"{line}={token}\n"
+    assert token not in out.read_text()
     key = tmp_path / ".generated" / "search.env"
     assert stat.S_IMODE(os.stat(key).st_mode) == 0o600 and key.read_text().startswith("SEARXNG_SECRET=")
     first = key.read_text()

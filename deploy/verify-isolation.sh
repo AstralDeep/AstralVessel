@@ -96,5 +96,16 @@ check "sandbox cannot reach the search service"         not_reach $SB search 808
 check "search has no direct route to the internet"      search_not_reach 1.1.1.1 443
 check "search cannot reach the harness API"             search_not_reach 172.31.247.10 8700
 check "harness reaches the search service"              reach vessel search 8080
+MODEL='import sys,urllib.request,urllib.error
+req = urllib.request.Request("http://egress:8080/v1/models", headers={"Authorization": "Bearer " + sys.argv[1]})
+try:
+    code, body = urllib.request.urlopen(req, timeout=10).status, b""
+except urllib.error.HTTPError as e:
+    code, body = e.code, e.read()
+print(code)
+gated = code == 403 and b"egress token" in body
+sys.exit(0 if (gated if sys.argv[2] == "refused" else code != 403) else 1)'
+check "search cannot use the model passthrough"         dc exec -T search sh -c '/usr/local/searxng/.venv/bin/python -c "$1" guess refused' _ "$MODEL"
+check "harness passes the egress with its token"        dc exec -T vessel sh -c 'python -c "$1" "$VESSEL_MODEL_KEY" allowed' _ "$MODEL"
 echo "$pass passed, $fail failed"
 [ "$fail" -eq 0 ]
