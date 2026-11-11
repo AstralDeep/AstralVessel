@@ -134,7 +134,7 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
         if dockerfile:
             # The agent's own image, built FROM the AstralVessel image (named "astralvessel" in its Dockerfile).
             base = "service:vessel" if repo_root else f"docker-image://{published('astralvessel')}"
-            image = {"image": f"astralvessel-sandbox-{agent_id}:local",
+            image = {"image": f"{deployment.vessel.project}-sandbox-{agent_id}:local",
                      "build": {"context": str(agent.host_package), "dockerfile": dockerfile,
                                "additional_contexts": {"astralvessel": base}}}
         else:
@@ -169,7 +169,7 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
         for mount in agent.profile.mounts:
             if mount.source.startswith("volume:"):
                 volumes[mount.source[7:]] = {"external": True}
-    return {"name": "astralvessel", "services": services, "networks": networks, "volumes": volumes}
+    return {"name": deployment.vessel.project, "services": services, "networks": networks, "volumes": volumes}
 
 
 def inputs_hash(deployment: Deployment) -> str:
