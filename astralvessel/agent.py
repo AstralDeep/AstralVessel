@@ -5,9 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import logging
-import math
 import time
 from collections.abc import Awaitable, Callable
 from datetime import date
@@ -19,7 +17,7 @@ from .model import ModelClient, ModelError, StepResult
 from .primitives import PRESENT_DESCRIPTION, PRESENT_PARAMETERS, validate_components
 from .sandbox import ToolRunner
 from .tools import BUILTIN_SCHEMAS, WEB_TOOLS, clip, tool_spec
-from .transcript import for_model
+from .transcript import for_model, parse_arguments, replayable
 from .web import webfetch, websearch
 
 log = logging.getLogger("astralvessel")
@@ -146,7 +144,8 @@ class Turn:
                 "role": "assistant",
                 "content": step.text or None,
                 "tool_calls": [{"id": c.id, "type": "function",
-                                "function": {"name": c.name, "arguments": c.arguments}} for c in step.tool_calls],
+                                "function": {"name": c.name, "arguments": replayable(c.arguments)}}
+                               for c in step.tool_calls],
             }
             if step.reasoning:
                 assistant["reasoning_content"] = step.reasoning
@@ -186,18 +185,13 @@ class Turn:
 
     async def _call_tool(self, call_id: str, name: str, raw_arguments: str) -> str:
         started = time.monotonic()
-        try:
-            arguments = json.loads(raw_arguments or "{}", parse_constant=_reject_number, parse_float=_finite)
-            if not isinstance(arguments, dict):
-                raise ValueError
-        except ValueError:
-            arguments = None
+        arguments = parse_arguments(raw_arguments)
         await self.emit(ev.event(ev.TOOL_STARTED, call_id=call_id, name=name,
                                  arguments=arguments if arguments is not None else raw_arguments[:2000]))
         if name not in self.allowed:
             output, failed = f"tool {name} does not exist", True
         elif arguments is None:
-            output, failed = "the arguments were not a valid JSON object", True
+            output, failed = "the arguments were not a valid JSON object; call the tool again with valid JSON", True
         else:
             try:
                 output, failed = await self._dispatch(name, arguments)
@@ -249,14 +243,3 @@ class Turn:
                     self.new_messages.append({"role": "tool", "tool_call_id": call["id"],
                                               "content": "[not run: the turn ended first]"})
                     answered.add(call["id"])
-
-
-def _reject_number(name: str) -> None:
-    raise ValueError(f"non-finite number {name}")
-
-
-def _finite(text: str) -> float:
-    value = float(text)
-    if math.isinf(value):
-        raise ValueError("non-finite number")
-    return value

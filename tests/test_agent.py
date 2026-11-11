@@ -4,13 +4,17 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 
+import httpx
+import pytest
 from conftest import text_reply, tool_reply
 
 from astralvessel.agent import Turn
 from astralvessel.manifest import load_package
-from astralvessel.model import ModelClient
+from astralvessel.model import ModelClient, ModelError
 from astralvessel.sandbox import LocalRunner
+from astralvessel.transcript import for_model
 
 
 def make_turn(package_dir, model):
@@ -55,11 +59,41 @@ async def test_unlisted_tool_does_not_exist(package_dir, model):
 
 
 async def test_bad_arguments_are_reported_not_raised(package_dir, model):
-    model.replies = [tool_reply("read", "{not json"), text_reply("ok")]
+    model.replies = [tool_reply("read", '{"path": notes/ada-lovelace.md}'),
+                     tool_reply("read", {"path": "notes/ada-lovelace.md"}, "call_2"), text_reply("ok")]
     turn, events = make_turn(package_dir, model)
     result = await run(turn)
-    assert result["status"] == "ok"
+    assert result["status"] == "ok" and result["steps"] == 3
+    assert "Analytical engine" in [e for e in events if e["type"] == "tool.finished"][1]["output"]
     assert "not a valid JSON object" in next(e for e in events if e["type"] == "tool.finished")["output"]
+    # Model endpoints refuse a request that replays the broken arguments, so the replay carries "{}".
+    replayed = model.requests[1]["messages"][-2]
+    assert replayed["tool_calls"][0]["function"]["arguments"] == "{}"
+    assert "not a valid JSON object" in model.requests[1]["messages"][-1]["content"]
+    assert turn.new_messages[1]["tool_calls"][0]["function"]["arguments"] == "{}"
+
+
+def test_history_with_broken_arguments_is_replayable():
+    def call(arguments):
+        return {"role": "assistant", "content": None, "tool_calls": [
+            {"id": "c", "type": "function", "function": {"name": "read", "arguments": arguments}}]}
+    broken = ['{"names": Ada, Grace}', "[1, 2]", '{"x": NaN}', " ", "[" * 100000]
+    history = [call(a) for a in broken] + [call('{"path": "a.md"}')]
+    sent = for_model(history, send_reasoning=False)
+    assert [m["tool_calls"][0]["function"]["arguments"] for m in sent] == ["{}"] * 5 + ['{"path": "a.md"}']
+    assert history[0]["tool_calls"][0]["function"]["arguments"] == '{"names": Ada, Grace}'
+
+
+async def test_a_refused_model_request_is_logged_for_the_operator(caplog):
+    def handler(request):
+        return httpx.Response(400, text='{"error": "arguments is not JSON"}\nFORGED log line')
+
+    client = ModelClient("http://model.test/v1", "k", "test-model", transport=httpx.MockTransport(handler), retries=0)
+    with caplog.at_level(logging.WARNING, logger="astralvessel"), pytest.raises(ModelError) as raised:
+        async for _ in client.stream([{"role": "user", "content": "hi"}], []):
+            pass
+    assert str(raised.value) == "model endpoint returned HTTP 400"
+    assert "arguments is not JSON" in caplog.text and "\\nFORGED" in caplog.text and "\nFORGED" not in caplog.text
 
 
 async def test_step_limit_forces_a_final_answer(package_dir, model):
