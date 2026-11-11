@@ -211,3 +211,43 @@ async def test_concurrent_calls_cannot_see_each_other(package_dir, tmp_path):
     assert pair.startswith("ok") and not failed
     await holder
     assert list(scratch.iterdir()) == []
+
+
+@landlock
+async def test_calls_in_one_turn_share_a_workspace_that_other_turns_cannot_see(package_dir, tmp_path):
+    scratch = tmp_path / "calls"
+    scratch.mkdir()
+    from astralvessel.manifest import load_package
+    package = load_package(package_dir)
+    runner = LocalRunner(package, confinement_for(package, str(scratch)))
+    turn_a, turn_b = "a" * 32, "b" * 32
+    _, failed = await runner.run("bash", {"command": "echo kept > $TMPDIR/table.rds"}, turn_a)
+    assert not failed
+    later, failed = await runner.run("bash", {"command": "cat $TMPDIR/table.rds"}, turn_a)
+    assert later.startswith("kept") and not failed
+    read, failed = await runner.run("read", {"path": str(scratch / f"turn-{turn_a}" / "table.rds")}, turn_a)
+    assert "kept" in read and not failed
+    other, _ = await runner.run("bash", {"command": f"cat {scratch}/turn-{turn_a}/table.rds; ls {scratch}"}, turn_b)
+    assert "kept" not in other and other.count("Permission denied") >= 2
+    other, failed = await runner.run("read", {"path": str(scratch / f"turn-{turn_a}" / "table.rds")}, turn_b)
+    assert failed and "outside" in other
+    unkeyed, _ = await runner.run("bash", {"command": f"cat {scratch}/turn-{turn_a}/table.rds"})
+    assert "kept" not in unkeyed
+    await runner.end_turn(turn_a)
+    assert sorted(p.name for p in scratch.iterdir()) == [f"turn-{turn_b}"]
+    await runner.end_turn(turn_b)
+    assert list(scratch.iterdir()) == []
+    _, failed = await runner.run("bash", {"command": "true"}, "../escape" + "0" * 23)
+    assert failed and list(scratch.iterdir()) == []
+
+
+def test_stale_workspaces_are_swept(tmp_path):
+    from astralvessel.tools import Confinement, sweep_workspaces
+    confinement = Confinement(readable=(), scratch_root=str(tmp_path))
+    old, fresh, other = tmp_path / ("turn-" + "a" * 32), tmp_path / ("turn-" + "b" * 32), tmp_path / "call-x"
+    for path in (old, fresh, other):
+        path.mkdir()
+    os.utime(old, (0, 0))
+    os.utime(other, (0, 0))
+    sweep_workspaces(confinement, 60)
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["call-x", fresh.name]

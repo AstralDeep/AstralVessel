@@ -200,6 +200,22 @@ def test_sandbox_server_refuses_a_short_token(package_dir):
         sandbox.sandbox_app(str(package_dir), token="short")
 
 
+async def test_sandbox_server_checks_workspace_keys(package_dir):
+    app = sandbox.sandbox_app(str(package_dir), token="t" * 16, confine=False)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://sb") as client:
+        auth = {"Authorization": "Bearer " + "t" * 16}
+        bad = await client.post("/run", json={"name": "bash", "args": {"command": "true"}, "workspace": "../x"},
+                                headers=auth)
+        assert bad.status_code == 400
+        good = await client.post("/run", json={"name": "bash", "args": {"command": "true"}, "workspace": "c" * 32},
+                                 headers=auth)
+        assert good.status_code == 200 and not good.json()["error"]
+        assert (await client.post("/end", json={"workspace": "c" * 32}, headers=auth)).status_code == 200
+        assert (await client.post("/end", json={"workspace": 5}, headers=auth)).status_code == 400
+        assert (await client.post("/end", json=["x"], headers=auth)).status_code == 400
+        assert (await client.post("/end", json={"workspace": "c" * 32})).status_code == 401
+
+
 REAL_CLIENT = httpx.AsyncClient
 
 

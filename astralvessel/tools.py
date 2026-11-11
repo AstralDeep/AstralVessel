@@ -7,11 +7,12 @@ import asyncio
 import contextlib
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -27,13 +28,23 @@ ACTIVE_SESSIONS: set[int] = set()
 SPAWNING = [0]
 MAX_OUTPUT_BYTES = 1_000_000
 MAX_LINE_CHARS = 4000
+WORKSPACE_KEY = re.compile(r"[0-9a-f]{32}")
 
 
 @dataclass(frozen=True)
 class Confinement:
-    # Each call gets a fresh scratch directory under scratch_root and may read only these roots (plus the system).
+    # Each call gets a fresh scratch directory under scratch_root, or its turn's workspace when one is set, and
+    # may read only these roots (plus the system).
     readable: tuple[str, ...]
     scratch_root: str
+    workspace: str | None = None
+
+    def for_turn(self, key: str) -> Confinement:
+        # A turn's calls share one workspace; the key is random per turn, so concurrent turns never meet.
+        if not WORKSPACE_KEY.fullmatch(key):
+            raise ValueError("invalid workspace key")
+        path = os.path.join(self.scratch_root, f"turn-{key}")
+        return replace(self, readable=(*self.readable, path), workspace=path)
 
     def allows(self, path: Path) -> bool:
         real = os.path.realpath(path)
@@ -126,14 +137,18 @@ async def _proc(argv: list[str], *, cwd: str, timeout: int, shell: bool = False,
         argv = ["/bin/sh", "-c", argv[0]]
     env, scratch = SAFE_ENV, None
     if confinement is not None:
-        scratch = tempfile.mkdtemp(prefix="call-", dir=confinement.scratch_root)
+        if confinement.workspace:
+            scratch = confinement.workspace
+            os.makedirs(scratch, mode=0o700, exist_ok=True)
+        else:
+            scratch = tempfile.mkdtemp(prefix="call-", dir=confinement.scratch_root)
         env = {**SAFE_ENV, "HOME": scratch, "TMPDIR": scratch}
         flags = [f for root in confinement.readable for f in ("--read", root)]
         argv = [sys.executable, "-I", "-S", landlock.__file__, "--scratch", scratch, *flags, "--", *argv]
     try:
         return await _supervise(argv, cwd=cwd, env=env, timeout=timeout, stdin=stdin)
     finally:
-        if scratch:
+        if scratch and not confinement.workspace:
             shutil.rmtree(scratch, ignore_errors=True)
 
 
@@ -304,8 +319,11 @@ async def _declared(tool: DeclaredTool, args: dict[str, Any], workdir: str, pack
 
 async def run_sandbox_tool(name: str, args: dict[str, Any], *, workdir: str, timeout: int,
                            declared: dict[str, DeclaredTool], package_root: str,
-                           confinement: Confinement | None = None) -> tuple[str, bool]:
+                           confinement: Confinement | None = None,
+                           workspace: str | None = None) -> tuple[str, bool]:
     try:
+        if workspace and confinement is not None:
+            confinement = confinement.for_turn(workspace)
         if name in ("read", "glob", "list") and confinement is not None:
             # These run inside the sandbox server itself, so they get the same path limits a confined call has.
             target = _resolve(args.get("path"), workdir)
@@ -330,3 +348,20 @@ async def run_sandbox_tool(name: str, args: dict[str, Any], *, workdir: str, tim
     except Exception:  # noqa: BLE001  any other failure becomes a generic tool error, never raw text
         return f"{name} failed", True
     return f"unknown tool {name}", True
+
+
+def end_workspace(confinement: Confinement | None, workspace: str) -> None:
+    if confinement is not None and WORKSPACE_KEY.fullmatch(workspace):
+        shutil.rmtree(confinement.for_turn(workspace).workspace, ignore_errors=True)
+
+
+def sweep_workspaces(confinement: Confinement | None, max_age_seconds: float) -> None:
+    # A workspace outlives its turn only if the vessel died before ending it; no turn runs past its deadline.
+    if confinement is None:
+        return
+    cutoff = time.time() - max_age_seconds
+    with contextlib.suppress(OSError), os.scandir(confinement.scratch_root) as entries:
+        for entry in entries:
+            with contextlib.suppress(OSError):
+                if entry.name.startswith("turn-") and entry.stat(follow_symlinks=False).st_mtime < cutoff:
+                    shutil.rmtree(entry.path, ignore_errors=True)
