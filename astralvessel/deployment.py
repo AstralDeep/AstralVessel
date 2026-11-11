@@ -8,6 +8,7 @@ import hmac
 import ipaddress
 import json
 import os
+import re
 import tomllib
 from pathlib import Path
 from typing import Literal
@@ -62,6 +63,32 @@ class SandboxProfile(Strict):
     cpus: float = Field(default=2, gt=0)
     pids: int = Field(default=512, ge=32)
     scratch: str = "256m"
+    # Disk a turn's workspace, and all of one user's live turns together, may hold inside scratch.
+    turn_disk: str | None = None  # default: a quarter of scratch
+    user_disk: str | None = None  # default: half of scratch, so one user cannot fill it
+
+    @model_validator(mode="after")
+    def disk_fits(self) -> SandboxProfile:
+        scratch, turn, user = size_bytes(self.scratch), self.turn_bytes, self.user_bytes
+        if not 0 < turn <= user <= scratch:
+            raise ValueError("need 0 < turn_disk <= user_disk <= scratch")
+        return self
+
+    @property
+    def turn_bytes(self) -> int:
+        return size_bytes(self.turn_disk) if self.turn_disk else size_bytes(self.scratch) // 4
+
+    @property
+    def user_bytes(self) -> int:
+        return size_bytes(self.user_disk) if self.user_disk else size_bytes(self.scratch) // 2
+
+
+def size_bytes(text: str) -> int:
+    # Docker-style sizes: "512k", "64m", "2g", or plain bytes.
+    match = re.fullmatch(r"(\d+)([bkmg]?)", text.strip().lower())
+    if not match:
+        raise ValueError(f"size {text!r} must look like 64m or 2g")
+    return int(match[1]) * 1024 ** "bkmg".index(match[2] or "b")
 
 
 class ServiceGrant(Strict):

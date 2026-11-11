@@ -7,6 +7,7 @@ from __future__ import annotations
 import ctypes
 import os
 import platform
+import resource
 import struct
 import sys
 
@@ -77,12 +78,15 @@ def apply(scratch: str, readable: list[str]) -> None:
 
 # SysV IPC and POSIX message queues are shared by everything running as one user, and Landlock covers neither them
 # nor UDP, so a call could hand data to another call through them. Calls have no network, so internet sockets go too.
-# Each entry: audit arch, the socket syscall, and the IPC syscalls.
+# setsid and setpgid go as well: every process a call starts stays in its session, so ending the call ends them all.
+# Each entry: audit arch, the socket syscall, and the blocked syscalls.
 SYSCALLS = {
-    "x86_64": (0xC000003E, 41, (29, 30, 31, 64, 65, 66, 67, 68, 69, 70, 71, 220, 240, 241, 242, 243, 244, 245)),
+    "x86_64": (0xC000003E, 41, (29, 30, 31, 64, 65, 66, 67, 68, 69, 70, 71, 220, 240, 241, 242, 243, 244, 245,
+                                109, 112)),
     "aarch64": (0xC00000B7, 198, (180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195,
-                                  196, 197)),
+                                  196, 197, 154, 157)),
 }
+MAX_OPEN_FILES = 4096  # keeps the server's scan of a call's open files cheap
 AF_INET, AF_INET6 = 2, 10
 PR_SET_SECCOMP, SECCOMP_MODE_FILTER = 22, 2
 RET_ALLOW, RET_EPERM = 0x7FFF0000, 0x00050000 | 1
@@ -115,19 +119,27 @@ def block_shared_ipc() -> None:
 
 
 def main(argv: list[str]) -> None:
-    scratch, readable = "", []
+    scratch, readable, fsize = "", [], 0
     while argv and argv[0] != "--":
         flag, value, argv = argv[0], argv[1], argv[2:]
         if flag == "--scratch":
             scratch = value
         elif flag == "--read":
             readable.append(value)
+        elif flag == "--fsize":
+            fsize = int(value)
         else:
             raise SystemExit(f"unknown flag {flag}")
     command = argv[1:]
     if not scratch or not command:
         raise SystemExit("usage: confine --scratch DIR [--read PATH]... -- argv...")
     try:
+        if fsize:
+            # No single file the call writes may outgrow the turn's disk limit.
+            resource.setrlimit(resource.RLIMIT_FSIZE, (fsize, fsize))
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        cap = MAX_OPEN_FILES if hard == resource.RLIM_INFINITY else min(MAX_OPEN_FILES, hard)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (min(soft, cap), cap))
         apply(scratch, readable)
     except OSError:
         sys.stderr.write("the sandbox could not confine this call\n")
