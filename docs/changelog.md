@@ -1,10 +1,15 @@
 # Changelog
 
-Changes by version, summarized from the repository's history. No version has been tagged or published yet; 0.5.0 is
-the first planned release, and the earlier version numbers follow the milestones in that history.
+Changes by version, summarized from the repository's history. 0.5.0 is the first published release; the earlier
+version numbers follow the milestones in that history and were never published.
 
-## 0.5.0 (next)
+## 0.5.0 (2026-11-11)
 
+- A workspace per turn that its tool calls share, deleted when the turn ends.
+- Files from tools (PNG, SVG, CSV, PDF) through `$VESSEL_OUTBOX`, checked twice and streamed as A2A artifacts.
+- `[vessel] project` for several deployments on one host.
+- CI (lint, tests on Python 3.11 and 3.12, isolation probes on a running deployment), Dependabot, and a release
+  workflow that publishes multi-architecture images to GHCR and the package to PyPI.
 - **The model endpoint is required.** `[egress] upstream_url` has no default; set it to an `http://` or `https://`
   URL or to `env:NAME`. The example deployment reads it from `VESSEL_UPSTREAM_MODEL_URL`.
 - **Disk limits per turn and per user.** `turn_disk` and `user_disk` in `[agents.sandbox]` (by default a quarter and
@@ -30,11 +35,6 @@ the first planned release, and the earlier version numbers follow the milestones
 - A turn survives tool arguments that are not JSON.
 - The vessel and sandboxes are recreated when an agent's manifest, tools or the deployment change, and a sandbox is
   served only if it loaded the same tools as the vessel.
-- A workspace per turn that its tool calls share, deleted when the turn ends.
-- Files from tools (PNG, SVG, CSV, PDF) through `$VESSEL_OUTBOX`, checked twice and streamed as A2A artifacts.
-- `[vessel] project` for several deployments on one host.
-- CI (lint, tests on Python 3.11 and 3.12, isolation probes on a running deployment), Dependabot, and a release
-  workflow that publishes multi-architecture images to GHCR and the package to PyPI.
 
 ## 0.3.0
 

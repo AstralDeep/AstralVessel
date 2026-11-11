@@ -54,4 +54,4 @@ Releases come from a version tag on `main`:
    with the version and `latest`, waits for a maintainer to approve the `pypi` environment, checks the images can
    be pulled without signing in, and publishes the package to PyPI through trusted publishing.
 
-No release has been tagged yet; until one is, install from a checkout.
+The first release is 0.5.0.

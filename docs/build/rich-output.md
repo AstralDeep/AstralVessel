@@ -47,11 +47,10 @@ A later `present` call in the same turn replaces the earlier components.
 
 An invalid list is refused with the first problem, and the model is asked to fix it and call `present` again.
 
-To validate outside the image, for example in tests, install the optional extra. Until the first release is on
-PyPI, install it from a checkout:
+To validate outside the image, for example in tests, install the optional extra:
 
 ```bash
-pip install -e ".[primitives]"     # astralprims>=0.12,<1
+pip install "astralvessel[primitives]"     # astralprims>=0.12,<1; from a checkout: pip install -e ".[primitives]"
 ```
 
 ## Where components appear

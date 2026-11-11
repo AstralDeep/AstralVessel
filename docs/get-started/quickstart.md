@@ -9,9 +9,9 @@ You need a Linux host with kernel 6.12 or newer (Landlock ABI 6), Docker with Co
 and an OpenAI-compatible model endpoint with an API key.
 
 !!! note "Installing from PyPI"
-    Releases publish the `astralvessel` package to PyPI and its images to GHCR (see
-    [Upgrading and releases](../run/upgrading.md)). No release has been tagged yet, so this quickstart installs
-    from a checkout, which builds the images locally.
+    `pip install astralvessel` installs the command, and its deployments pull the released images from GHCR (see
+    [Upgrading and releases](../run/upgrading.md)). This quickstart uses a checkout instead, because the example
+    deployment lives in the repository; a checkout builds the images locally.
 
 ## 1. Install the command
 
