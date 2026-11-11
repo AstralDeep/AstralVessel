@@ -13,6 +13,7 @@ import httpx
 
 PRIMITIVES_MEDIA_TYPE = "application/vnd.astral.primitives+json"
 TRANSCRIPT_MEDIA_TYPE = "application/vnd.astralvessel.transcript+json"
+FILE_MEDIA_TYPES = ["image/png", "image/svg+xml", "text/csv", "application/pdf"]
 
 
 class VesselClient:
@@ -51,7 +52,7 @@ class VesselClient:
         if conversation_id:
             message["contextId"] = conversation_id
         # Asking for the transcript media type is what makes the vessel stream the turn's messages back.
-        accepted = ["text/markdown", TRANSCRIPT_MEDIA_TYPE, PRIMITIVES_MEDIA_TYPE]
+        accepted = ["text/markdown", TRANSCRIPT_MEDIA_TYPE, PRIMITIVES_MEDIA_TYPE, *FILE_MEDIA_TYPES]
         body = {"jsonrpc": "2.0", "id": uuid.uuid4().hex, "method": "SendStreamingMessage",
                 "params": {"message": message, "configuration": {"acceptedOutputModes": accepted}}}
         headers = {**self._user(user), "Accept": "text/event-stream", "A2A-Version": "1.0"}
@@ -137,6 +138,15 @@ def decode(frame: dict[str, Any]) -> list[dict[str, Any]]:
                 body = _data(part) or {}
                 out.append({"type": "transcript", "messages": body.get("messages", []), "turn": body.get("turn"),
                             "last": bool(result["artifactUpdate"].get("lastChunk")), "raw": frame})
+    elif "artifactUpdate" in result and (result["artifactUpdate"].get("artifact") or {}).get("name") == "file":
+        # A file a tool returned, decoded to bytes; SVG can carry script, so show it only as an image or download.
+        for part in result["artifactUpdate"]["artifact"].get("parts") or []:
+            try:
+                data = base64.b64decode(part.get("raw") or "", validate=True)
+            except ValueError:
+                continue
+            out.append({"type": "file", "name": part.get("filename"), "media_type": part.get("mediaType"),
+                        "data": data, "call_id": (part.get("metadata") or {}).get("call_id"), "raw": frame})
     elif "artifactUpdate" in result:
         artifact = (result["artifactUpdate"].get("artifact") or {})
         text, components, version = "", [], None
