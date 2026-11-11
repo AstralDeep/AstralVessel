@@ -1,0 +1,103 @@
+site_name: AstralVessel
+site_description: A small, standalone A2A agent harness with a sandbox per agent.
+site_url: https://astraldeep.github.io/AstralVessel/
+repo_url: https://github.com/AstralDeep/AstralVessel
+repo_name: AstralDeep/AstralVessel
+edit_uri: edit/main/docs/
+copyright: AstralVessel is licensed under Apache 2.0.
+
+docs_dir: docs
+exclude_docs: |
+  hooks/
+  requirements.txt
+
+hooks:
+  - docs/hooks/config_tables.py
+
+theme:
+  name: material
+  language: en
+  font:
+    text: Open Sans
+    code: Open Sans
+  palette:
+    - scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to the light scheme
+    - scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/weather-night
+        name: Switch to the dark scheme
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - navigation.indexes
+    - search.highlight
+    - toc.follow
+  icon:
+    repo: material/github
+
+extra_css:
+  - stylesheets/astral.css
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Get started:
+      - Overview: index.md
+      - Quickstart: get-started/quickstart.md
+      - How it works: get-started/how-it-works.md
+  - Build agents:
+      - The agent folder: build/agent-folder.md
+      - vessel.toml: build/vessel-toml.md
+      - Prompts: build/prompts.md
+      - Declared tools: build/declared-tools.md
+      - Built-in tools: build/builtin-tools.md
+      - Service tools: build/service-tools.md
+      - Workspaces and files: build/workspaces-and-files.md
+      - Rich output: build/rich-output.md
+  - Run it:
+      - deployment.toml: run/deployment-toml.md
+      - Models and egress: run/models-and-egress.md
+      - Search: run/search.md
+      - Identity, apps and issuers: run/identity.md
+      - Connecting an application: run/applications.md
+      - Several deployments on one host: run/several-deployments.md
+      - Upgrading and releases: run/upgrading.md
+  - Security:
+      - Threat model: security/threat-model.md
+      - Isolation and probes: security/isolation.md
+      - What it trusts: security/trust.md
+      - Platform support: security/platforms.md
+  - Reference:
+      - CLI: reference/cli.md
+      - HTTP and A2A protocol: reference/protocol.md
+      - Events: reference/events.md
+      - Transcript format: reference/transcript.md
+      - Python client and history store: reference/python.md
+      - Configuration tables: reference/configuration.md
+      - Environment variables: reference/environment.md
+      - Limits: reference/limits.md
+  - Troubleshooting: troubleshooting.md
+  - Changelog: changelog.md

@@ -24,6 +24,9 @@ primitives = ["astralprims>=0.12,<1"]
 
 [project.urls]
 Repository = "https://github.com/AstralDeep/AstralVessel"
+Documentation = "https://astraldeep.github.io/AstralVessel/"
+Issues = "https://github.com/AstralDeep/AstralVessel/issues"
+Changelog = "https://astraldeep.github.io/AstralVessel/changelog/"
 
 [project.scripts]
 astralvessel = "astralvessel.cli:main"
