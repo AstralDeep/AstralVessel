@@ -27,12 +27,12 @@ The vessel serves an agent only while its sandbox reports that it is confined an
 | Landlock (filesystem) | Read and execute only the system directories (`/usr`, `/bin`, `/sbin`, `/lib`, `/lib64`, `/etc`, `/opt`), the agent folder, the `workdir`, the mounts, and a few devices (`/dev/null`, `/dev/zero`, `/dev/urandom`, `/dev/random`). Write only the turn's workspace. No `/proc`, so no view of other processes. Socket files cannot be created. |
 | Landlock (network) | No TCP bind or connect. |
 | Landlock (scoping) | No signals to processes outside the call, no abstract Unix sockets outside it. |
-| seccomp | No SysV IPC or POSIX message queues (shared by everything running as one user), no IPv4 or IPv6 sockets. From 0.5.0 also no `setsid` or `setpgid`, so every process stays in the call's session. |
+| seccomp | No SysV IPC or POSIX message queues (shared by everything running as one user), no IPv4 or IPv6 sockets. No `setsid` or `setpgid`, so every process stays in the call's session. |
 | `no_new_privs` | Set before the rules apply. |
 | Environment | Only `PATH`, `LANG`, `HOME`, `TMPDIR` and `VESSEL_OUTBOX`. |
-| Time and output | The tool's timeout, then the whole process group is killed; at most 1,000,000 bytes of output. |
+| Time and output | The tool's timeout, then the whole process group is killed; output is capped (see [Limits](../reference/limits.md#tools)). |
 | Strays | Processes a call leaves behind are killed. |
-| 0.5.0 limits | At most 4,096 open files; no file larger than the turn's disk limit; [disk limits](../build/workspaces-and-files.md#disk-limits) per turn and per user. |
+| Files and disk | At most 4,096 open files; no file larger than the turn's disk limit; [disk limits](../build/workspaces-and-files.md#disk-limits) per turn and per user. |
 
 If confinement cannot be applied, the call fails with exit code 126 and does not run. A sandbox whose kernel lacks
 Landlock ABI 6 refuses to start.
@@ -55,16 +55,16 @@ deployment.
 
 | Area | Probes |
 |---|---|
-| Sandbox network | no route to the internet; cannot resolve or reach the egress; cannot reach the model host directly; cannot reach the vessel's API by name or by its front address; cannot reach another agent's sandbox; cannot reach search |
+| Sandbox network | no route to the internet; cannot resolve or reach the egress; the model host is known to the probes; cannot reach the model host directly; cannot reach the vessel's API by name or by its front address; cannot reach another agent's sandbox; cannot reach search |
 | Sandbox contents | holds no task or conversation store; holds no model or app key; holds its own token, not the master; root filesystem is read-only; scratch space is `noexec`; data is mounted read-only |
 | Tool calls | a background process does not outlive its call; a call cannot read another call's scratch; cannot list processes; cannot open TCP connections; cannot create a socket file; cannot use shared memory; cannot open UDP sockets; `glob` cannot climb out of the agent's data |
-| Workspaces | calls in one turn share its workspace; a call cannot read another turn's workspace; a turn's workspace is gone once it ends; the sandbox refuses a malformed workspace key; a turn over its disk limit is stopped and emptied (0.5.0) |
+| Workspaces | calls in one turn share its workspace; a call cannot read another turn's workspace; a turn's workspace is gone once it ends; the sandbox refuses a malformed workspace key; a turn over its disk limit is stopped and emptied |
 | Files | a file written to the outbox reaches the vessel; the outbox refuses other types, big files and links; an outbox swapped for a link exposes nothing |
 | Vessel | keeps no conversation store; has no direct route to the internet; reaches the model through the egress; reaches the search service |
 | Egress proxy | refuses the cloud metadata address, private addresses and shared (Tailscale) addresses; refuses odd ports; allows a public site on 443 |
 | Search and model gate | search has no direct route to the internet; cannot reach the vessel's API; cannot use the model passthrough; the vessel passes the egress with its token |
 
-That is 41 probes, 42 with 0.5.0.
+That is 43 probes.
 
 ## Conformance checks
 

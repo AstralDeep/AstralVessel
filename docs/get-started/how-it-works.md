@@ -63,10 +63,10 @@ every network with the project name, so the default `front` network is `astralve
 manifest and declared tools as loaded (without the model key), and its sandbox Dockerfile and the files that
 Dockerfile copies. The sandbox reports the fingerprint it was started with, and the vessel serves the agent only
 while the fingerprint and the loaded manifest match its own. The vessel container is labeled with a hash of the
-deployment file and every fingerprint, so `docker compose up -d` recreates it when either changes.
+deployment file, every fingerprint and every issuer key file, so `docker compose up -d` recreates it when any of them changes.
 
 | You changed | Do this |
 |---|---|
 | `prompt.md` or a `prompt_append` file | Nothing; it is read on every turn |
 | A script a tool runs | Nothing; the agent folder is mounted, not copied |
-| `vessel.toml`, a tool's `.toml`, `deployment.toml`, or a sandbox Dockerfile | `astralvessel deploy`, then `docker compose ... up -d` (add `--build` for a Dockerfile change) |
+| `vessel.toml`, a tool's `.toml`, `deployment.toml`, an issuer's `jwks_file`, or a sandbox Dockerfile | `astralvessel deploy`, then `docker compose ... up -d` (add `--build` for a Dockerfile change) |

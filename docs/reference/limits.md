@@ -29,7 +29,7 @@ Fixed limits in this version, in one place. Limits you can configure are in the
 | `webfetch` | 4 MB, 30 seconds, 5 redirects |
 | `websearch` | 8 results by default, 20 at most |
 | Service answer | 1,000,000 bytes |
-| Open files per call (0.5.0) | 4,096 |
+| Open files per call | 4,096 |
 
 ## Files and components
 

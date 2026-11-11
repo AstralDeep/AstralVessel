@@ -37,9 +37,9 @@ An orchestrator with an identity provider can send each user's signed token inst
 ```toml
 [[issuers]]
 id = "astral"
-issuer = "https://iam.example.edu/realms/Astral"
+issuer = "https://iam.example.com/realms/Astral"
 audience = "research-vessel"
-jwks_url = "https://iam.example.edu/realms/Astral/protocol/openid-connect/certs"
+jwks_url = "https://iam.example.com/realms/Astral/protocol/openid-connect/certs"
 authorized_parties = ["astral-orchestrator"]
 agents = ["field-guide"]
 ```
@@ -67,9 +67,12 @@ dot-separated parts starting `ey`); otherwise it is checked as an app key. A tok
 Shared-secret (`HS256`) and unsigned tokens are always refused. When a token names a key the vessel does not have,
 it refetches the key set, at most once a minute; if a fetch fails or returns no usable keys, it keeps the keys it had.
 
-!!! warning "jwks_file in the generated Compose file"
-    The generated Compose file mounts only `deployment.toml` into the vessel, not files beside it, so a `jwks_file`
-    is not readable there and tokens from that issuer are refused. Use `jwks_url` with the generated deployment.
+### Key files
+
+With `jwks_file`, the generated Compose file mounts the file read-only into the vessel at
+`/deploy-keys/<issuer id>.json`. A missing file is refused when the deployment loads. The file's contents are part
+of the hash the vessel container is labeled with, so to rotate keys, replace the file, run `astralvessel deploy`,
+then `docker compose ... up -d`, which recreates the vessel with the new keys.
 
 ## What a caller may reach
 

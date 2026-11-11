@@ -18,18 +18,6 @@ MARKER = re.compile(r"<!-- config: (astralvessel\.[a-z]+)\.([A-Za-z]+) -->")
 BOUNDS = (("gt", ">"), ("ge", ">="), ("lt", "<"), ("le", "<="), ("min_length", "min length"),
           ("max_length", "max length"))
 
-# Changes documented ahead of their merge. Each applies only while the code still lacks it, so it falls away by
-# itself once the change lands; remove the entry then.
-PENDING_FIELDS = {
-    # PR #12: per-turn and per-user disk limits.
-    "SandboxProfile": [
-        ("turn_disk", "str \\| None", "a quarter of `scratch`", "size such as `64m`; 0.5.0"),
-        ("user_disk", "str \\| None", "half of `scratch`", "size such as `128m`; 0.5.0"),
-    ],
-}
-# The model endpoint has no default host: `upstream_url` is required (PR evan/require-endpoint, 0.5.0).
-REQUIRED = {("EgressSection", "upstream_url"), ("DeploymentFile", "egress")}
-
 # Checks made by validators, which the field metadata cannot show.
 CHECKS = {
     "VesselSection": ["`front_address` must be inside `front_subnet`, and `front_subnet` must be a network "
@@ -47,11 +35,14 @@ CHECKS = {
                        "App names are unique; issuer ids and issuer URLs are each unique.",
                        "Every agent an app or issuer names must exist."],
     "SandboxProfile": ["Each mount must be read-only, and the targets must match the agent's `[sandbox] mounts` "
-                       "exactly.", "With 0.5.0: `0 < turn_disk <= user_disk <= scratch`."],
+                       "exactly.",
+                       "`turn_disk` defaults to a quarter of `scratch` and `user_disk` to half; sizes look like `64m` "
+                       "or `2g`, and `0 < turn_disk <= user_disk <= scratch`."],
     "AgentEntry": ["The `services` keys must match the services the agent's tools name, no more and no fewer.",
                    "Each `prompt_append` file must exist inside the agent folder."],
     "SandboxSection": ["`dockerfile` must be inside the agent folder."],
-    "EgressSection": ["`upstream_url` must start with `http://`, `https://` or `env:`."],
+    "EgressSection": ["`upstream_url` must be an `http://` or `https://` URL with a host and no spaces, or `env:NAME` "
+                      "with a valid variable name."],
 }
 
 
@@ -82,7 +73,7 @@ def _value(value: typing.Any) -> str:
 
 
 def _default(model: str, name: str, field: typing.Any) -> str:
-    if (model, name) in REQUIRED or field.is_required():
+    if field.is_required():
         return "**required**"
     if field.default is PydanticUndefined:
         return _value(field.default_factory())
@@ -106,9 +97,6 @@ def table(module: str, name: str) -> str:
     for field_name, field in model.model_fields.items():
         rows.append(f"| `{field_name}` | {_type(field.annotation)} | {_default(name, field_name, field)} | "
                     f"{_constraints(field)} |")
-    for field_name, kind, default, constraint in PENDING_FIELDS.get(name, []):
-        if field_name not in model.model_fields:
-            rows.append(f"| `{field_name}` | {kind} | {default} | {constraint} |")
     checks = CHECKS.get(name)
     if checks:
         rows += ["", "Also checked when the file loads:", ""] + [f"- {line}" for line in checks]

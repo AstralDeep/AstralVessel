@@ -19,7 +19,7 @@ theme:
   language: en
   font:
     text: Open Sans
-    code: Open Sans
+    code: JetBrains Mono
   palette:
     - scheme: slate
       primary: custom

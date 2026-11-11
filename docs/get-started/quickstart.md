@@ -98,7 +98,7 @@ You should see one line for `field-guide` and one for `field-guide-reader`.
 ./verify-isolation.sh
 ```
 
-It runs 41 probes from inside the containers (42 with 0.5.0) and ends with `41 passed, 0 failed`. Every probe is
+It runs 43 probes from inside the containers and ends with `43 passed, 0 failed`. Every probe is
 listed in [Isolation and probes](../security/isolation.md). The script targets the example deployment's agent ids.
 
 ## 6. Ask a question

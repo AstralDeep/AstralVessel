@@ -27,6 +27,7 @@ fills it from the environment or `--env-file`.
 | `VESSEL_TASK_DB` | `/data/tasks.sqlite` | The task store; default `./vessel-data/tasks.sqlite` |
 | `VESSEL_HOST` | `front_address` | Listen address; default `127.0.0.1` |
 | `VESSEL_PORT` | (unset) | Listen port; default `8700` |
+| `VESSEL_JWKS_DIR` | `/deploy-keys`, when an issuer sets `jwks_file` | Where issuer key files are mounted, as `<dir>/<issuer id>.json`. Set by the generated Compose file, not by operators; `deploy` ignores it. |
 | `VESSEL_DEV_UNSANDBOXED` | (unset) | `1` runs tools unconfined in the vessel process when no sandbox template is set. Tests only. |
 | Each `env:` name used by `key_sha256` or a service grant | `${NAME}` | Resolved when the vessel starts |
 
@@ -38,7 +39,7 @@ fills it from the environment or `--env-file`.
 | `VESSEL_PORT` | `8710` | Listen port |
 | `VESSEL_SANDBOX_TOKEN` | the derived per-sandbox token (from `.generated/sandbox-<id>.env`) | Required, 16 or more characters |
 | `VESSEL_PROFILE_HASH` | the agent's fingerprint | Reported on `/health` |
-| `VESSEL_TURN_DISK`, `VESSEL_USER_DISK` | `turn_disk` and `user_disk` in bytes | 0.5.0 disk limits |
+| `VESSEL_TURN_DISK`, `VESSEL_USER_DISK` | `turn_disk` and `user_disk` in bytes | Disk limits per turn and per user |
 | `VESSEL_UNCONFINED` | (unset) | `1` starts without Landlock. Development only. |
 
 ## The egress

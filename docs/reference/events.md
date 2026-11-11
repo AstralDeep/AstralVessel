@@ -22,7 +22,7 @@ update. This page lists each event's fields.
 | `step.finished` | `step`, `tool_calls` (count), `tokens` (`input`, `output`), `finish_reason` | After each model call |
 | `tool.started` | `call_id`, `name`, `arguments` (the parsed object, or the first 2,000 characters of invalid input) | Before each tool call |
 | `tool.finished` | `call_id`, `name`, `output` (first 4,000 characters), `error`, `truncated`, `elapsed_ms` | After each tool call, including stopped ones (`output: "[stopped]"`) |
-| `turn.finished` | `status`, `tokens`, `steps`, `elapsed_ms`, `files` (when any), `error` (when any) | Once, last, in the task's final status |
+| `turn.finished` | `status`, `tokens`, `steps`, `elapsed_ms`, `files` (the files attached; an empty list may be left out on the wire, so read a missing key as `[]`), `error` (when any) | Once, last, in the task's final status |
 
 Every `tool.started` has a matching `tool.finished`. Text written in the same model message as a tool call streams
 as `text.delta` too; it is narration, and the answer is the final message without tool calls, delivered as the

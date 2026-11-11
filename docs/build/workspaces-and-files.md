@@ -29,8 +29,8 @@ wc -l < "$TMPDIR/hits.txt"
 
 ## Disk limits
 
-!!! note "0.5.0"
-    Per-turn and per-user disk limits arrive in 0.5.0.
+!!! note "New in 0.5.0"
+    Per-turn and per-user disk limits.
 
 Inside `scratch`, the sandbox limits how much one turn and one user may hold, so one turn cannot fill the space
 other users share:
@@ -71,7 +71,7 @@ files = ["png", "csv"]   # any of png, svg, csv, pdf
 A confined call writes files into `$VESSEL_OUTBOX`, a folder inside its workspace:
 
 ```bash
-printf 'name,length_cm\nGreat Blue Heron,117\n' > "$VESSEL_OUTBOX/lengths.csv"
+printf 'name,length_cm\nGreat Blue Heron,115\n' > "$VESSEL_OUTBOX/lengths.csv"
 ```
 
 After each call the sandbox takes every entry out of the outbox. It keeps a file only if all of these hold:

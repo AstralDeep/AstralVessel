@@ -1,7 +1,7 @@
 # Changelog
 
-Changes by version, summarized from the repository's history. No version has been tagged or published yet; the
-version numbers below follow the milestones in that history.
+Changes by version, summarized from the repository's history. No version has been tagged or published yet; 0.5.0 is
+the first planned release, and the earlier version numbers follow the milestones in that history.
 
 ## 0.5.0 (next)
 
@@ -10,10 +10,14 @@ version numbers below follow the milestones in that history.
 - **Disk limits per turn and per user.** `turn_disk` and `user_disk` in `[agents.sandbox]` (by default a quarter and
   half of `scratch`). No file may outgrow the turn's limit; each file or folder also counts 1 KB; files deleted but
   still open count. A turn over either limit has its calls stopped and its workspace emptied. One new isolation
-  probe (42 in total).
+  probe.
 - **Calls stay in their session.** seccomp blocks `setsid` and `setpgid`, and each call may hold at most 4,096 open
   files.
+- **Issuer key files work in the generated deployment.** A `jwks_file` is mounted into the vessel, a missing one
+  is refused when the deployment loads, and changing its contents recreates the vessel on the next `up -d`.
+- The conformance checks accept the `file` event.
 - **A documentation site**, built with MkDocs and published to GitHub Pages.
+- The isolation probes now number 43.
 
 ## 0.4.0
 

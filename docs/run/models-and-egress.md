@@ -14,7 +14,8 @@ upstream_url = "https://api.example.com/v1"
 upstream_key = "env:VESSEL_UPSTREAM_MODEL_KEY"
 ```
 
-`upstream_url` is required and must start with `http://`, `https://` or `env:`. Each agent then picks a model name:
+`upstream_url` is required: an `http://` or `https://` URL with a host and no spaces, or `env:NAME` with a valid
+variable name. Each agent then picks a model name:
 
 ```toml
 # vessel.toml
@@ -36,8 +37,9 @@ The egress forwards only `POST chat/completions` and `GET models`. Any other pat
 without the vessel's token is refused with 403, so other containers on the egress network (search, for example)
 cannot spend the key.
 
-Keep the agent's `[model] endpoint` and `api_key` at their defaults (`env:VESSEL_MODEL_URL`, `env:VESSEL_MODEL_KEY`);
-the generated Compose file sets both for the egress.
+Keep the agent's `[model] endpoint` and `api_key` at their defaults (`env:VESSEL_MODEL_URL`, `env:VESSEL_MODEL_KEY`).
+The generated Compose file sets both in the vessel's environment: `VESSEL_MODEL_URL` points at the egress, and
+`VESSEL_MODEL_KEY` (from `.generated/vessel.env`) is the derived egress token.
 
 ## Model behavior the loop handles
 

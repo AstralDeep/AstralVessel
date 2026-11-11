@@ -26,20 +26,16 @@ replace it.
 ```json
 {"components": [
   {"type": "metric", "title": "Species", "value": "4"},
-  {"type": "table", "title": "Lengths", "headers": ["Name", "cm"], "rows": [["Great Blue Heron", 117]]},
+  {"type": "table", "title": "Lengths", "headers": ["Name", "cm"], "rows": [["Great Blue Heron", 115]]},
   {"type": "bar_chart", "title": "Length by species", "labels": ["Heron", "Hawk"],
-   "datasets": [{"label": "cm", "data": [117, 56]}]}
+   "datasets": [{"label": "cm", "data": [115, 56]}]}
 ]}
 ```
 
 The tool description lists these shapes for the model: `metric`, `stat_group`, `table`, `bar_chart`, `line_chart`,
 `key_value`, `list`, `card`, `alert` and `text`.
 
-| Limit | Value |
-|---|---|
-| Components per answer | 12 |
-| Size | 200,000 bytes of JSON |
-
+At most 12 components and 200,000 bytes of JSON per answer (see [Limits](../reference/limits.md#files-and-components)).
 A later `present` call in the same turn replaces the earlier components.
 
 ## Validation
@@ -51,10 +47,11 @@ A later `present` call in the same turn replaces the earlier components.
 
 An invalid list is refused with the first problem, and the model is asked to fix it and call `present` again.
 
-To validate outside the image, for example in tests, install the optional extra:
+To validate outside the image, for example in tests, install the optional extra. Until the first release is on
+PyPI, install it from a checkout:
 
 ```bash
-pip install "astralvessel[primitives]"     # astralprims>=0.12,<1
+pip install -e ".[primitives]"     # astralprims>=0.12,<1
 ```
 
 ## Where components appear

@@ -18,6 +18,7 @@ docker compose -f compose.generated.yml --env-file .env logs sandbox-<agent>
 | `declared tool names collide` | Rename a declared tool that repeats another one or a built-in tool. |
 | `unknown builtin tools` | Use only `read`, `grep`, `glob`, `list`, `bash`, `webfetch`, `websearch`. |
 | `Extra inputs are not permitted` | A misspelled or unsupported key; check [Configuration tables](reference/configuration.md). |
+| `issuer <id>: jwks_file ... is not a file` | The issuer's key file is missing; the path is relative to the deployment file. |
 | `Field required` for `egress.upstream_url` | Set `[egress] upstream_url` to your model endpoint; there is no default. |
 | `... belongs to project '...'; give each deployment its own folder, or --out` | Two deployments share a folder. See [Several deployments on one host](run/several-deployments.md). |
 | `docker compose` says `set NAME in the environment or .env` | An `env:NAME` value has no value; add it to `.env`. |
@@ -45,7 +46,6 @@ docker compose -f compose.generated.yml --env-file .env logs sandbox-<agent>
 | No transcript in the response | Add `application/vnd.astralvessel.transcript+json` to `acceptedOutputModes`. |
 | No files in the response | List their media types in `acceptedOutputModes` (or list none), and the type in the agent's `[output] files`. |
 | Cannot reach the vessel from the host | It publishes no ports. Call it from a container on the `<project>_front` network. |
-| Tokens from an issuer with `jwks_file` are always refused | The generated Compose file does not mount the file into the vessel. Use `jwks_url`. |
 
 ## During a turn
 
@@ -58,4 +58,4 @@ docker compose -f compose.generated.yml --env-file .env logs sandbox-<agent>
 | A tool result `[timed out after N s]` | Raise `tool_timeout_seconds` or the tool's `timeout_seconds`. |
 | `webfetch` returns `blocked or unreachable` | The proxy refused a non-public address or a port other than 80 or 443, or the site is down. |
 | Searches fail with engine errors | Engines are rate limiting or blocking; SearXNG suspends a CAPTCHA engine for 10 minutes. With `duckduckgo`, switch to `searxng`. |
-| `[stopped: the files went over ... disk limit ...]` (0.5.0) | The turn or user went over `turn_disk` or `user_disk`. Raise them, or have the agent delete files it no longer needs. |
+| `[stopped: the files went over ... disk limit ...]` | The turn or user went over `turn_disk` or `user_disk`. Raise them, or have the agent delete files it no longer needs. |

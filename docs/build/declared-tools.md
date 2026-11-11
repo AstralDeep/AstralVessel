@@ -107,12 +107,9 @@ The vessel refuses arguments that are not a JSON object, and the model is told t
 The command's standard output and standard error, combined, are the result. An exit status other than zero marks
 the call as an error. Empty output becomes `[exit code N]`.
 
-| Limit | Value |
-|---|---|
-| Output kept from the process | 1,000,000 bytes; the process is stopped beyond that |
-| Output the model sees | `tool_output_chars` (default 20,000 characters), cut with a note |
-| Output shown in the `tool.finished` event | 4,000 characters |
-| Time | `timeout_seconds` or `tool_timeout_seconds`; then the process group is killed and the result is `[timed out after N s]` |
+Output is cut to the agent's `tool_output_chars` for the model, with a note saying how much was dropped. A call
+that runs past `timeout_seconds` (or `tool_timeout_seconds`) has its process group killed and returns
+`[timed out after N s]`. The fixed output caps are in [Limits](../reference/limits.md#tools).
 
 ## Where it runs
 
@@ -123,8 +120,8 @@ Each call runs in the agent's sandbox as its own confined process:
 - It has no network, cannot see or signal other processes, cannot make socket files, and cannot use shared memory or
   message queues.
 - Its environment holds only `PATH`, `LANG`, `HOME`, `TMPDIR` and `VESSEL_OUTBOX`, never a secret.
-- Processes it leaves running in the background are killed. From 0.5.0 a call also cannot start a new session or
-  process group (`setsid`, `setpgid` are blocked), may hold at most 4,096 open files, and may not write a single
+- It cannot start a new session or process group (`setsid` and `setpgid` are blocked), so processes it leaves
+  running in the background are killed with it. It may hold at most 4,096 open files, and may not write a single
   file larger than the turn's disk limit (see [Disk limits](workspaces-and-files.md#disk-limits)).
 
 A tool that needs software beyond the base image ships a [sandbox Dockerfile](vessel-toml.md#extra-software-in-the-sandbox).

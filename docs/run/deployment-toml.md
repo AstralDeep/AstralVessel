@@ -1,8 +1,8 @@
 # deployment.toml
 
 `deployment.toml` is the operator's file. It lists the agents one vessel serves, grants each one its data, services
-and sandbox limits, and says who may call which agent. It is the only place access is granted. The full field list
-is generated from the code in [Configuration tables](../reference/configuration.md#deploymenttoml).
+and sandbox limits, and says who may call which agent. It is the only place access is granted. Types, defaults and
+constraints for every key are generated from the code in [Configuration tables](../reference/configuration.md#deploymenttoml).
 
 ## A complete example
 
@@ -41,50 +41,50 @@ Relative paths (`package`, mount sources, `jwks_file`) are relative to the deplo
 
 ## [vessel]
 
-| Key | Default | Meaning |
-|---|---|---|
-| `project` | `"astralvessel"` | The Compose project name. It prefixes containers, networks, volumes and locally built images. See [Several deployments on one host](several-deployments.md). |
-| `public_url` | `"http://vessel:8700"` | The base URL written into agent cards and the agent list. Set it to the address your callers use. |
-| `front_subnet` | `"172.31.247.0/24"` | The subnet of the internal `front` network. |
-| `front_address` | `"172.31.247.10"` | The vessel's fixed address on `front`; it listens only there, on port 8700. |
-| `task_ttl_hours` | `24` | Task records not updated for this long are deleted, checked hourly. |
+| Key | Meaning |
+|---|---|
+| `project` | The Compose project name. It prefixes containers, networks, volumes and locally built images. See [Several deployments on one host](several-deployments.md). |
+| `public_url` | The base URL written into agent cards and the agent list. Set it to the address your callers use. |
+| `front_subnet` | The subnet of the internal `front` network. |
+| `front_address` | The vessel's fixed address on `front`; it listens only there, on port 8700. |
+| `task_ttl_hours` | Task records not updated for this long are deleted, checked hourly. |
 
 ## [egress]
 
-| Key | Default | Meaning |
-|---|---|---|
-| `upstream_url` | **required** | Your OpenAI-compatible base URL, such as `https://api.example.com/v1`, or `env:NAME`. |
-| `upstream_key` | `"env:VESSEL_UPSTREAM_MODEL_KEY"` | The model key, normally as `env:NAME`. |
+| Key | Meaning |
+|---|---|
+| `upstream_url` | Your OpenAI-compatible base URL, such as `https://api.example.com/v1`, or `env:NAME`. |
+| `upstream_key` | The model key, normally as `env:NAME`. |
 
 See [Models and egress](models-and-egress.md).
 
 ## [search]
 
-| Key | Default | Meaning |
-|---|---|---|
-| `provider` | `"searxng"` | `searxng` runs a private SearXNG container; `duckduckgo` scrapes DuckDuckGo's HTML page. See [Search](search.md). |
+| Key | Meaning |
+|---|---|
+| `provider` | `searxng` runs a private SearXNG container; `duckduckgo` scrapes DuckDuckGo's HTML page. See [Search](search.md). |
 
 ## [[agents]]
 
-| Key | Default | Meaning |
-|---|---|---|
-| `id` | required | Lowercase letters, digits and hyphens, starting with a letter. The agent's address is `/agents/<id>`. |
-| `package` | required | The agent folder. |
-| `prompt_append` | `[]` | Extra briefing files from the folder, appended after `prompt.md`. See [Prompts](../build/prompts.md). |
-| `sandbox` | defaults below | The sandbox profile. |
-| `services` | `{}` | Service grants, one per service the agent's tools name. See [Service tools](../build/service-tools.md). |
+| Key | Meaning |
+|---|---|
+| `id` | Lowercase letters, digits and hyphens, starting with a letter. The agent's address is `/agents/<id>`. |
+| `package` | The agent folder. |
+| `prompt_append` | Extra briefing files from the folder, appended after `prompt.md`. See [Prompts](../build/prompts.md). |
+| `sandbox` | The sandbox profile. |
+| `services` | Service grants, one per service the agent's tools name. See [Service tools](../build/service-tools.md). |
 
 ### [agents.sandbox]
 
-| Key | Default | Meaning |
-|---|---|---|
-| `mounts` | `[]` | `{ target, source, read_only }` grants, one for each mount the agent declares. |
-| `memory` | `"2g"` | The container's memory limit. |
-| `cpus` | `2` | CPU limit; greater than 0. |
-| `pids` | `512` | Process limit; at least 32. |
-| `scratch` | `"256m"` | Size of the sandbox's `/tmp`, which holds every turn's workspace. |
-| `turn_disk` | a quarter of `scratch` | 0.5.0. Disk one turn may use. See [Disk limits](../build/workspaces-and-files.md#disk-limits). |
-| `user_disk` | half of `scratch` | 0.5.0. Disk one user's live turns may use together. |
+| Key | Meaning |
+|---|---|
+| `mounts` | `{ target, source, read_only }` grants, one for each mount the agent declares. |
+| `memory` | The container's memory limit. |
+| `cpus` | CPU limit; greater than 0. |
+| `pids` | Process limit; at least 32. |
+| `scratch` | Size of the sandbox's `/tmp`, which holds every turn's workspace. |
+| `turn_disk` | Disk one turn may use; a quarter of `scratch` unless set. See [Disk limits](../build/workspaces-and-files.md#disk-limits). |
+| `user_disk` | Disk one user's live turns may use together; half of `scratch` unless set. |
 
 A mount `source` can be:
 
