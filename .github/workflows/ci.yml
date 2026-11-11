@@ -1,6 +1,7 @@
-# Lint, the test suite on each supported Python, both images, and the example's Compose generation, on every pull
-# request and every push to main. It needs no secrets: the tests use a scripted model. Hosted kernels lack Landlock
-# ABI 6, so confinement tests skip here and the full isolation run stays a maintainer step (README, Contributing).
+# Lint, the test suite on each supported Python, and isolation probes against the example deployment built from
+# this commit, on every pull request and every push to main. It needs no
+# secrets: the tests use a scripted model and the deployment placeholder keys. Conformance needs a real model, so it
+# stays a maintainer step (README, Contributing).
 name: CI
 
 on:
@@ -50,7 +51,7 @@ jobs:
       - run: pip install -e . pytest==9.2.0 pytest-asyncio==1.4.1.post1 "$ASTRALPRIMS"
       - run: python -m pytest -q -rs
 
-  images:
+  isolation:
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -60,13 +61,24 @@ jobs:
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97  # v7.0.0
         with:
           python-version: "3.12"
-      - run: docker build -t astralvessel:local .
-      - run: docker build -t astralvessel-egress:local egress
       - run: pip install -e .
-      - name: Generate and validate the example's Compose file
+      - name: Start the example deployment with placeholder keys
         working-directory: deploy
         run: |
           printf '%s\n' VESSEL_UPSTREAM_MODEL_KEY=ci VESSEL_APP_KEY=ci VESSEL_APP_KEY_SHA256=ci \
-            VESSEL_SANDBOX_TOKEN=ci-sandbox-token > ci.env
-          astralvessel deploy deployment.toml --env-file ci.env
-          docker compose -f compose.generated.yml --env-file ci.env config --quiet
+            "VESSEL_SANDBOX_TOKEN=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" > .env
+          astralvessel deploy deployment.toml
+          docker compose -f compose.generated.yml --env-file .env up -d --build --wait --wait-timeout 300 || true
+          for i in $(seq 60); do
+            [ "$(docker compose -f compose.generated.yml --env-file .env logs vessel | grep -c 'sandbox is ready')" -ge 2 ] && exit 0
+            sleep 5
+          done
+          docker compose -f compose.generated.yml --env-file .env logs
+          exit 1
+      - name: Isolation probes
+        working-directory: deploy
+        run: ./verify-isolation.sh
+      - name: Logs on failure
+        if: failure()
+        working-directory: deploy
+        run: docker compose -f compose.generated.yml --env-file .env logs --tail 50
