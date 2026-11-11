@@ -102,9 +102,11 @@ hostile: a prompt injection can make the agent try anything its tools allow. Aga
 
 - the model key in the egress alone, and app keys as hashes in the vessel;
 - conversation history with the application, never in the vessel or a sandbox;
-- data read-only, each sandbox off every network, and each call out of other calls' files and processes;
+- data read-only, tool calls with no network (a sandbox's only link is to the vessel), and each call out
+  of other calls' files and processes;
 - each user's tasks bound to their owner, and each app limited to the agents it was granted;
-- outbound traffic to public addresses on ports 80 and 443 only.
+- agent-driven web traffic to public addresses on ports 80 and 443 only (the model endpoint is the
+  operator's choice).
 
 It trusts the operator and the host's kernel and Docker, the application to name its users honestly (or
 the token issuers the deployment lists), and the model provider and search engines with what is sent to
@@ -240,8 +242,10 @@ its own process, unconfined. That mode is for tests only: never point a model at
   checks need a real model, so a change to the agent loop, the A2A interface, the sandbox or the
   web tools also needs them run by hand (the steps in "Run the example"), all passing. Say in the
   pull request that they passed.
-- Releases: bump `version` in `pyproject.toml` on `main`, then push the tag `v<version>`; the release
-  workflow publishes the images and the package.
+- Releases: bump `version` (X.Y.Z) in `pyproject.toml` on `main`, run the Release workflow by hand
+  as a dry run, then push the tag `v<version>` on `main`. It publishes the images, waits for a
+  maintainer's approval of the `pypi` environment, checks the images are public, then publishes the
+  package.
 - This README is the only document. Update it in the same pull request when behavior changes.
 
 ## Status

@@ -20,7 +20,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-primitives = ["astralprims>=0.12"]
+primitives = ["astralprims>=0.12,<1"]
 
 [project.urls]
 Repository = "https://github.com/AstralDeep/AstralVessel"
