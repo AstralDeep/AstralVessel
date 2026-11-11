@@ -7,11 +7,11 @@ import ipaddress
 import logging
 import os
 import socket
+from typing import Any
 from urllib.parse import urlsplit
-from typing import Any, Optional
 
 import httpx
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.background import BackgroundTask
 
@@ -24,7 +24,7 @@ ALLOWED_LLM_PATHS = {"chat/completions": {"POST"}, "models": {"GET"}}
 
 
 app = FastAPI(title="astralvessel egress", docs_url=None, redoc_url=None, openapi_url=None)
-_client: Optional[httpx.AsyncClient] = None
+_client: httpx.AsyncClient | None = None
 
 
 @app.on_event("startup")
@@ -76,7 +76,8 @@ async def llm(path: str, request: Request):
         resp = await client().send(upstream, stream=True)
     except httpx.HTTPError as exc:
         raise HTTPException(status_code=502, detail="model upstream unreachable") from exc
-    passthrough = {k: v for k, v in resp.headers.items() if k.lower() in ("content-type", "cache-control", "x-request-id")}
+    kept = ("content-type", "cache-control", "x-request-id")
+    passthrough = {k: v for k, v in resp.headers.items() if k.lower() in kept}
     return StreamingResponse(resp.aiter_bytes(), status_code=resp.status_code, headers=passthrough,
                              background=BackgroundTask(resp.aclose))
 

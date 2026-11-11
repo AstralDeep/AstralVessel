@@ -195,6 +195,23 @@ uv pip install -e ../AstralDeep/components/AstralPrimitives      # optional: val
 The vessel refuses to start without sandboxes unless `VESSEL_DEV_UNSANDBOXED=1`, which runs tools in
 its own process, unconfined. That mode is for tests only: never point a model at it.
 
+## Contributing
+
+- Work on a branch named for the change and open a pull request against `main`. CI (lint, tests on
+  Python 3.11 and 3.12, both images, and the example's Compose file) must pass, and a maintainer
+  reviews before it merges.
+- Before pushing, run `ruff check .` and `.venv/bin/python -m pytest -q`. Add a test with each fix
+  or feature.
+- AstralVessel stays application-neutral: no code, examples, prompts or docs about a particular
+  application that uses it. An application's own agents live in that application's repo.
+- Never commit secrets, `.env` files, or generated Compose output (`deploy/compose.generated.yml`,
+  `deploy/.generated/`).
+- A change to the sandbox, confinement, Compose generation, egress or web tools also needs the full
+  isolation run on a Linux host with kernel 6.12 or newer, which CI's hosted runners are not: the
+  steps in "Run the example", including `verify-isolation.sh` and the conformance checks, all passing.
+  Say in the pull request that it passed.
+- This README is the only document. Update it in the same pull request when behavior changes.
+
 ## Status
 
 Version 0.4, November 2026. Done:
@@ -211,6 +228,7 @@ Version 0.4, November 2026. Done:
 - a task store that survives restarts, owner binding, cancellation, and AstralPrimitives output
 - unit and service tests, isolation probes, conformance checks, a load test, and an independent
   security review
+- CI on every pull request: lint, tests, image builds and a Compose check
 
 Load test, in one process on one core with a fake model (the load generator shares that core): 50
 concurrent users, three turns each, every turn sending a 1,000-message history, running a confined
