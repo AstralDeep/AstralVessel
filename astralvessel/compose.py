@@ -10,7 +10,7 @@ import secrets as tokens
 from pathlib import Path
 from typing import Any
 
-from .deployment import Deployment, egress_token, sandbox_token
+from .deployment import Deployment, egress_token, sandbox_token, size_bytes
 
 IMAGE = "astralvessel:local"
 SANDBOX_PORT = 8710
@@ -141,7 +141,9 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
                             "VESSEL_USER_DISK": str(agent.profile.user_bytes)},
             "env_file": [f".generated/sandbox-{agent_id}.env"],
             "volumes": mounts,
-            "tmpfs": [f"/tmp:size={agent.profile.scratch},noexec,nosuid,nodev,mode=1777"],
+            # One inode per KB of scratch, matching the charge per entry, so empty files cannot exhaust memory.
+            "tmpfs": [f"/tmp:size={agent.profile.scratch},nr_inodes={size_bytes(agent.profile.scratch) // 1024},"
+                      "noexec,nosuid,nodev,mode=1777"],
             "networks": [tools],
             "mem_limit": agent.profile.memory, "cpus": agent.profile.cpus, "pids_limit": agent.profile.pids,
             "labels": {"astralvessel.agent": agent_id, "astralvessel.profile": agent.fingerprint},

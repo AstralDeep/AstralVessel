@@ -9,6 +9,7 @@ import errno
 import json
 import os
 import re
+import secrets
 import shutil
 import stat
 import sys
@@ -158,7 +159,7 @@ async def _proc(argv: list[str], *, cwd: str, timeout: int, shell: bool = False,
         return await _supervise(argv, cwd=cwd, env=env, timeout=timeout, stdin=stdin)
     finally:
         if scratch and not confinement.workspace:
-            shutil.rmtree(scratch, ignore_errors=True)
+            remove_tree(scratch)
 
 
 async def _supervise(argv: list[str], *, cwd: str, env: dict[str, str], timeout: int,
@@ -403,17 +404,105 @@ def outbox_of(workspace: str) -> str:
 
 def end_workspace(confinement: Confinement | None, workspace: str) -> None:
     if confinement is not None and WORKSPACE_KEY.fullmatch(workspace):
-        shutil.rmtree(confinement.for_turn(workspace).workspace, ignore_errors=True)
+        remove_tree(confinement.for_turn(workspace).workspace)
 
 
-def disk_usage(path: str) -> int:
-    # Bytes a workspace holds on disk, counting allocated blocks so sparse files cannot hide; links are not followed.
-    total = 0
-    for root, dirs, files in os.walk(path):
-        for name in (*dirs, *files):
-            with contextlib.suppress(OSError):
-                total += os.lstat(os.path.join(root, name)).st_blocks * 512
+# Calls and the server share a uid, so a call can chmod its folders shut or nest them past PATH_MAX. The server
+# only ever adds owner rights back (Landlock, not file modes, is the boundary) and keeps paths shallow.
+ENTRY_BYTES = 1024  # charged per file or folder, so millions of empty ones cannot slip under a limit
+MAX_DEPTH = 32
+FLAT_DEPTH = 8
+
+
+def _open_up(path: str) -> None:
+    with contextlib.suppress(OSError):
+        fd = os.open(path, os.O_PATH | os.O_NOFOLLOW)
+        try:
+            mode = os.fstat(fd).st_mode
+            if stat.S_ISDIR(mode) and mode & 0o700 != 0o700:
+                os.chmod(f"/proc/self/fd/{fd}", stat.S_IMODE(mode) | 0o700)
+        finally:
+            os.close(fd)
+
+
+def _scan(path: str) -> list[os.DirEntry]:
+    try:
+        with os.scandir(path) as entries:
+            return list(entries)
+    except PermissionError:
+        _open_up(path)
+        with os.scandir(path) as entries:
+            return list(entries)
+
+
+def disk_usage(path: str, limit: int = 0) -> int:
+    # Allocated bytes plus a charge per entry, stopping early once over limit. A tree too deep or too long to
+    # walk counts as over any limit.
+    total, stack = 0, [(path, 0)]
+    while stack:
+        folder, depth = stack.pop()
+        try:
+            entries = _scan(folder)
+        except FileNotFoundError:
+            continue
+        except OSError:
+            return max(total, limit) + 1
+        for entry in entries:
+            try:
+                info = entry.stat(follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            total += info.st_blocks * 512 + ENTRY_BYTES
+            if stat.S_ISDIR(info.st_mode):
+                if depth + 1 > MAX_DEPTH:
+                    return max(total, limit) + 1
+                stack.append((entry.path, depth + 1))
+        if limit and total > limit:
+            return total
     return total
+
+
+def remove_tree(root: str) -> None:
+    # Move anything nested deeper than FLAT_DEPTH up to the top first, so paths stay short and rmtree stays shallow.
+    stack = [(root, 0)]
+    while stack:
+        folder, depth = stack.pop()
+        try:
+            entries = _scan(folder)
+        except OSError:
+            continue
+        for entry in entries:
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            _open_up(entry.path)
+            if depth + 1 < FLAT_DEPTH:
+                stack.append((entry.path, depth + 1))
+                continue
+            moved = os.path.join(root, f".flat-{secrets.token_hex(8)}")
+            with contextlib.suppress(OSError):
+                os.rename(entry.path, moved)
+                stack.append((moved, 1))
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def open_deleted_usage(prefix: str) -> dict[str, int]:
+    # Files a call deleted but still holds open keep their space; charge them to the workspace they were in.
+    found: dict[tuple[int, int], tuple[str, int]] = {}
+    for pid in filter(str.isdigit, os.listdir("/proc")):
+        with contextlib.suppress(OSError):
+            if os.getsid(int(pid)) not in ACTIVE_SESSIONS:
+                continue
+            for fd in os.listdir(f"/proc/{pid}/fd"):
+                with contextlib.suppress(OSError):
+                    target = os.readlink(f"/proc/{pid}/fd/{fd}")
+                    if target.startswith(prefix) and target.endswith(" (deleted)"):
+                        info = os.stat(f"/proc/{pid}/fd/{fd}")
+                        workspace = target[len(prefix):].split("/", 1)[0]
+                        found[(info.st_dev, info.st_ino)] = (workspace, info.st_blocks * 512)
+    usage: dict[str, int] = {}
+    for workspace, size in found.values():
+        usage[workspace] = usage.get(workspace, 0) + size
+    return usage
 
 
 def sweep_workspaces(confinement: Confinement | None, live: set[str]) -> None:
@@ -424,4 +513,4 @@ def sweep_workspaces(confinement: Confinement | None, live: set[str]) -> None:
     with contextlib.suppress(OSError), os.scandir(confinement.scratch_root) as entries:
         for entry in entries:
             if entry.name.startswith("turn-") and entry.name.removeprefix("turn-") not in live:
-                shutil.rmtree(entry.path, ignore_errors=True)
+                remove_tree(entry.path)

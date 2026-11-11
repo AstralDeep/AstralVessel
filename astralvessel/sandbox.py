@@ -28,6 +28,7 @@ from .tools import (
     Confinement,
     disk_usage,
     end_workspace,
+    open_deleted_usage,
     outbox_of,
     run_sandbox_tool,
     sweep_workspaces,
@@ -179,12 +180,20 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
     ended: dict[str, None] = {}  # recently ended keys, oldest first; a late call for one is refused
     owners: dict[str, str] = {}  # live turn -> its user's digest
 
-    def over_limit(workspace: str | None) -> str:
+    measured: dict[str, tuple[float, int]] = {}  # workspace -> (when, bytes), shared by concurrent calls
+
+    def over_limit(workspace: str | None, fresh: bool = False) -> str:
         # Which disk limit a turn has gone over, if any; a user's limit covers all their live turns together.
         if confinement is None or not workspace:
             return ""
+        now = time.monotonic()
+        deleted = open_deleted_usage(os.path.join(confinement.scratch_root, "turn-"))
         def used(key: str) -> int:
-            return disk_usage(confinement.for_turn(key).workspace)
+            when, size = measured.get(key, (0.0, 0))
+            if now - when > 0.4 or (fresh and key == workspace):
+                size = disk_usage(confinement.for_turn(key).workspace, user_disk or turn_disk) + deleted.get(key, 0)
+                measured[key] = (now, size)
+            return size
         if turn_disk and used(workspace) > turn_disk:
             return f"this turn's {turn_disk // (1024 * 1024)} MB"
         owner = owners.get(workspace)
@@ -192,12 +201,24 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
             return f"your {user_disk // (1024 * 1024)} MB across turns"
         return ""
 
-    async def stop_over_limit(workspace: str, limit: str) -> JSONResponse:
-        runner.files.pop(workspace, None)
-        await asyncio.to_thread(end_workspace, confinement, workspace)
+    stopped: dict[str, str] = {}  # turn -> why its calls were stopped, for the calls cancelled alongside
+
+    def stop_note(limit: str) -> JSONResponse:
         return JSONResponse({"error": True, "files": [],
                              "output": f"[stopped: the files went over {limit} disk limit, so this turn's "
                                        "workspace was emptied; write less, or delete files you no longer need]"})
+
+    async def stop_over_limit(workspace: str, limit: str) -> JSONResponse:
+        # Stop every call of the turn, not only this one, before emptying the workspace under them.
+        stopped[workspace] = limit
+        tasks = running.get(workspace, set()) - {asyncio.current_task()}
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        runner.files.pop(workspace, None)
+        measured.pop(workspace, None)
+        await asyncio.to_thread(end_workspace, confinement, workspace)
+        return stop_note(limit)
 
     def authorized(request: Request) -> bool:
         supplied = request.headers.get("authorization", "").removeprefix("Bearer ")
@@ -225,7 +246,8 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
         owner = body.get("owner")
         if owner is not None and not (isinstance(owner, str) and WORKSPACE_KEY.fullmatch(owner)):
             return JSONResponse({"error": True, "output": "invalid owner"}, status_code=400)
-        if workspace and owner and owners.setdefault(workspace, owner) != owner:
+        # A turn keeps the user its first call named, or none; a call naming anyone else is refused.
+        if workspace and owners.setdefault(workspace, owner or "") != (owner or ""):
             return JSONResponse({"error": True, "output": "this turn belongs to another user"}, status_code=403)
         now = time.monotonic()
         if workspace:
@@ -233,6 +255,8 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
         for key in [k for k, t in started.items() if now - t > stale_after]:
             del started[key]
             owners.pop(key, None)
+            measured.pop(key, None)
+            stopped.pop(key, None)
         await asyncio.to_thread(sweep_workspaces, confinement, set(started))
         reap_strays()
         task = asyncio.create_task(runner.run(name, args, workspace))
@@ -250,9 +274,11 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
                     await asyncio.gather(task, return_exceptions=True)
                     return await stop_over_limit(workspace, limit)
             if task.cancelled():
+                if workspace in stopped:
+                    return stop_note(stopped[workspace])
                 return JSONResponse({"error": True, "output": "this turn has ended"}, status_code=410)
             output, error = task.result()
-            if limit := await asyncio.to_thread(over_limit, workspace):
+            if limit := await asyncio.to_thread(over_limit, workspace, True):
                 return await stop_over_limit(workspace, limit)
         finally:
             reap_strays()
@@ -273,6 +299,8 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
             del ended[next(iter(ended))]
         started.pop(workspace, None)
         owners.pop(workspace, None)
+        measured.pop(workspace, None)
+        stopped.pop(workspace, None)
         # Stop the turn's calls still in flight first, so none writes into or recreates the workspace after it.
         tasks = running.pop(workspace, set())
         for task in tasks:

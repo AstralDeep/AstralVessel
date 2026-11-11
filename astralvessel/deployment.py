@@ -54,8 +54,8 @@ class SandboxProfile(Strict):
     pids: int = Field(default=512, ge=32)
     scratch: str = "256m"
     # Disk a turn's workspace, and all of one user's live turns together, may hold inside scratch.
-    turn_disk: str | None = None  # default: half of scratch
-    user_disk: str | None = None  # default: all of scratch
+    turn_disk: str | None = None  # default: a quarter of scratch
+    user_disk: str | None = None  # default: half of scratch, so one user cannot fill it
 
     @model_validator(mode="after")
     def disk_fits(self) -> SandboxProfile:
@@ -66,11 +66,11 @@ class SandboxProfile(Strict):
 
     @property
     def turn_bytes(self) -> int:
-        return size_bytes(self.turn_disk) if self.turn_disk else size_bytes(self.scratch) // 2
+        return size_bytes(self.turn_disk) if self.turn_disk else size_bytes(self.scratch) // 4
 
     @property
     def user_bytes(self) -> int:
-        return size_bytes(self.user_disk) if self.user_disk else size_bytes(self.scratch)
+        return size_bytes(self.user_disk) if self.user_disk else size_bytes(self.scratch) // 2
 
 
 def size_bytes(text: str) -> int:

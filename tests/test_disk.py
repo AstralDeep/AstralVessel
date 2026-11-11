@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 
 import httpx
 import pytest
@@ -26,7 +27,7 @@ def test_sizes_and_defaults_follow_scratch(package_dir, tmp_path):
     path = tmp_path / "deployment.toml"
     path.write_text(deployment_text(package_dir, mounts='scratch = "100m"'))
     env = generate(load_deployment(path), repo_root=None)["services"]["sandbox-guide"]["environment"]
-    assert (env["VESSEL_TURN_DISK"], env["VESSEL_USER_DISK"]) == (str(50 * 1024 ** 2), str(100 * 1024 ** 2))
+    assert (env["VESSEL_TURN_DISK"], env["VESSEL_USER_DISK"]) == (str(25 * 1024 ** 2), str(50 * 1024 ** 2))
     path.write_text(deployment_text(package_dir, mounts='scratch = "100m"\nturn_disk = "10m"\nuser_disk = "30m"'))
     env = generate(load_deployment(path), repo_root=None)["services"]["sandbox-guide"]["environment"]
     assert (env["VESSEL_TURN_DISK"], env["VESSEL_USER_DISK"]) == (str(10 * 1024 ** 2), str(30 * 1024 ** 2))
@@ -107,3 +108,47 @@ async def test_a_turn_stays_with_the_user_who_started_it(package_dir):
         assert (await client.post("/run", json={**call, "owner": ALICE}, headers=AUTH)).status_code == 200
         assert (await client.post("/run", json={**call, "owner": BOB}, headers=AUTH)).status_code == 403
         assert (await client.post("/run", json={**call, "owner": "../x"}, headers=AUTH)).status_code == 400
+        assert (await client.post("/run", json=call, headers=AUTH)).status_code == 403
+
+
+def test_folders_shut_with_chmod_are_counted_and_removed(tmp_path):
+    from astralvessel.tools import disk_usage, remove_tree
+    shut = tmp_path / "turn" / "d"
+    shut.mkdir(parents=True)
+    (shut / "big").write_bytes(b"x" * 300_000)
+    shut.chmod(0)
+    assert disk_usage(str(tmp_path / "turn")) >= 300_000
+    shut.chmod(0)
+    remove_tree(str(tmp_path / "turn"))
+    assert not (tmp_path / "turn").exists()
+
+
+def test_empty_entries_are_charged_and_deep_trees_count_as_over(tmp_path):
+    from astralvessel.tools import ENTRY_BYTES, MAX_DEPTH, disk_usage, remove_tree
+    flat = tmp_path / "flat"
+    flat.mkdir()
+    for index in range(100):
+        (flat / f"e{index}").touch()
+    assert disk_usage(str(flat)) == 100 * ENTRY_BYTES
+    deep = tmp_path / "deep"
+    deep.mkdir()
+    fd = os.open(deep, os.O_RDONLY)
+    for _ in range(MAX_DEPTH + 40):  # deeper than PATH_MAX can name in one string
+        os.mkdir("n" * 100, dir_fd=fd)
+        child = os.open("n" * 100, os.O_RDONLY, dir_fd=fd)
+        os.close(fd)
+        fd = child
+    os.close(fd)
+    assert disk_usage(str(deep), limit=10 ** 9) > 10 ** 9
+    remove_tree(str(deep))
+    assert not deep.exists()
+
+
+@landlock
+async def test_a_deleted_file_held_open_still_counts(package_dir, tmp_path, monkeypatch):
+    client, _ = disk_app(package_dir, tmp_path, monkeypatch, turn=1024 * 1024, user=4 * 1024 * 1024)
+    hold = "exec 3>$TMPDIR/f; head -c 1500000 /dev/urandom >&3; rm $TMPDIR/f; sleep 5; echo done"
+    async with client:
+        out = (await client.post("/run", json={"name": "bash", "args": {"command": hold}, "workspace": "c" * 32,
+                                               "owner": ALICE}, headers=AUTH)).json()
+        assert out["error"] and "disk limit" in out["output"]
