@@ -190,7 +190,7 @@ async def test_a_turn_passes_one_workspace_to_its_calls_and_ends_it(package_dir,
     turn, _ = make_turn(package_dir, model)
     seen, ended = [], []
 
-    async def record(name, args, workspace=None):
+    async def record(name, args, workspace=None, owner=""):
         seen.append(workspace)
         return "done", False
 

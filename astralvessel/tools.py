@@ -41,6 +41,7 @@ class Confinement:
     readable: tuple[str, ...]
     scratch_root: str
     workspace: str | None = None
+    max_file_bytes: int = 0  # 0: no limit beyond the scratch filesystem
 
     def for_turn(self, key: str) -> Confinement:
         # A turn's calls share one workspace; the key is random per turn, so concurrent turns never meet.
@@ -150,6 +151,8 @@ async def _proc(argv: list[str], *, cwd: str, timeout: int, shell: bool = False,
             scratch = tempfile.mkdtemp(prefix="call-", dir=confinement.scratch_root)
         env.update(HOME=scratch, TMPDIR=scratch)
         flags = [f for root in confinement.readable for f in ("--read", root)]
+        if confinement.max_file_bytes:
+            flags += ["--fsize", str(confinement.max_file_bytes)]
         argv = [sys.executable, "-I", "-S", landlock.__file__, "--scratch", scratch, *flags, "--", *argv]
     try:
         return await _supervise(argv, cwd=cwd, env=env, timeout=timeout, stdin=stdin)
@@ -401,6 +404,16 @@ def outbox_of(workspace: str) -> str:
 def end_workspace(confinement: Confinement | None, workspace: str) -> None:
     if confinement is not None and WORKSPACE_KEY.fullmatch(workspace):
         shutil.rmtree(confinement.for_turn(workspace).workspace, ignore_errors=True)
+
+
+def disk_usage(path: str) -> int:
+    # Bytes a workspace holds on disk, counting allocated blocks so sparse files cannot hide; links are not followed.
+    total = 0
+    for root, dirs, files in os.walk(path):
+        for name in (*dirs, *files):
+            with contextlib.suppress(OSError):
+                total += os.lstat(os.path.join(root, name)).st_blocks * 512
+    return total
 
 
 def sweep_workspaces(confinement: Confinement | None, live: set[str]) -> None:

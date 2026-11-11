@@ -4,10 +4,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import hmac
 import os
 import signal
 import time
+from dataclasses import replace
 from typing import Any, Protocol
 
 import httpx
@@ -24,6 +26,7 @@ from .tools import (
     SPAWNING,
     WORKSPACE_KEY,
     Confinement,
+    disk_usage,
     end_workspace,
     outbox_of,
     run_sandbox_tool,
@@ -35,7 +38,9 @@ SCRATCH_ROOT = "/tmp/vessel-calls"
 
 class ToolRunner(Protocol):
     # workspace is the turn's random key: calls that pass the same key share one scratch directory.
-    async def run(self, name: str, args: dict[str, Any], workspace: str | None = None) -> tuple[str, bool]: ...
+    # owner names the turn's user, so the sandbox can hold each user to a disk limit across their turns.
+    async def run(self, name: str, args: dict[str, Any], workspace: str | None = None,
+                  owner: str = "") -> tuple[str, bool]: ...
 
     async def end_turn(self, workspace: str) -> None: ...
 
@@ -57,7 +62,8 @@ class LocalRunner:
         self.confinement = confinement
         self.files: dict[str, list[outputs.ToolFile]] = {}
 
-    async def run(self, name: str, args: dict[str, Any], workspace: str | None = None) -> tuple[str, bool]:
+    async def run(self, name: str, args: dict[str, Any], workspace: str | None = None,
+                  owner: str = "") -> tuple[str, bool]:
         sandbox = self.package.manifest.sandbox
         workdir = os.environ.get("VESSEL_WORKDIR") or sandbox.workdir
         output, error = await run_sandbox_tool(name, args, workdir=workdir, timeout=sandbox.tool_timeout_seconds,
@@ -97,9 +103,13 @@ class RemoteRunner:
             return None
         return response.json() if response.status_code == 200 else None
 
-    async def run(self, name: str, args: dict[str, Any], workspace: str | None = None) -> tuple[str, bool]:
+    async def run(self, name: str, args: dict[str, Any], workspace: str | None = None,
+                  owner: str = "") -> tuple[str, bool]:
+        # The sandbox only needs to tell users apart, so it gets a digest, never the name.
+        user = hashlib.sha256(owner.encode()).hexdigest()[:32] if owner else None
         try:
-            response = await self._client.post("/run", json={"name": name, "args": args, "workspace": workspace})
+            response = await self._client.post("/run", json={"name": name, "args": args, "workspace": workspace,
+                                                             "owner": user})
         except httpx.HTTPError:
             return "the sandbox is unreachable", True
         if response.status_code != 200:
@@ -157,12 +167,37 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
                              "unavailable (set VESSEL_UNCONFINED=1 only for development)")
         os.makedirs(scratch_root, mode=0o711, exist_ok=True)
         confinement = confinement_for(package, scratch_root)
+    turn_disk = int(os.environ.get("VESSEL_TURN_DISK") or 0)
+    user_disk = int(os.environ.get("VESSEL_USER_DISK") or 0)
+    if confinement is not None and turn_disk:
+        confinement = replace(confinement, max_file_bytes=turn_disk)
     runner = LocalRunner(package, confinement)
     profile = os.environ.get("VESSEL_PROFILE_HASH", "")
     stale_after = package.manifest.sandbox.deadline_seconds + 60
     started: dict[str, float] = {}  # live turns and when each was first seen
     running: dict[str, set[asyncio.Task]] = {}
     ended: dict[str, None] = {}  # recently ended keys, oldest first; a late call for one is refused
+    owners: dict[str, str] = {}  # live turn -> its user's digest
+
+    def over_limit(workspace: str | None) -> str:
+        # Which disk limit a turn has gone over, if any; a user's limit covers all their live turns together.
+        if confinement is None or not workspace:
+            return ""
+        def used(key: str) -> int:
+            return disk_usage(confinement.for_turn(key).workspace)
+        if turn_disk and used(workspace) > turn_disk:
+            return f"this turn's {turn_disk // (1024 * 1024)} MB"
+        owner = owners.get(workspace)
+        if user_disk and owner and sum(used(k) for k, o in list(owners.items()) if o == owner) > user_disk:
+            return f"your {user_disk // (1024 * 1024)} MB across turns"
+        return ""
+
+    async def stop_over_limit(workspace: str, limit: str) -> JSONResponse:
+        runner.files.pop(workspace, None)
+        await asyncio.to_thread(end_workspace, confinement, workspace)
+        return JSONResponse({"error": True, "files": [],
+                             "output": f"[stopped: the files went over {limit} disk limit, so this turn's "
+                                       "workspace was emptied; write less, or delete files you no longer need]"})
 
     def authorized(request: Request) -> bool:
         supplied = request.headers.get("authorization", "").removeprefix("Bearer ")
@@ -187,11 +222,17 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
             return JSONResponse({"error": True, "output": "invalid workspace"}, status_code=400)
         if workspace in ended:
             return JSONResponse({"error": True, "output": "this turn has ended"}, status_code=410)
+        owner = body.get("owner")
+        if owner is not None and not (isinstance(owner, str) and WORKSPACE_KEY.fullmatch(owner)):
+            return JSONResponse({"error": True, "output": "invalid owner"}, status_code=400)
+        if workspace and owner and owners.setdefault(workspace, owner) != owner:
+            return JSONResponse({"error": True, "output": "this turn belongs to another user"}, status_code=403)
         now = time.monotonic()
         if workspace:
             started.setdefault(workspace, now)
         for key in [k for k, t in started.items() if now - t > stale_after]:
             del started[key]
+            owners.pop(key, None)
         await asyncio.to_thread(sweep_workspaces, confinement, set(started))
         reap_strays()
         task = asyncio.create_task(runner.run(name, args, workspace))
@@ -204,9 +245,15 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
                 if not done and await request.is_disconnected():
                     task.cancel()
                     return JSONResponse({"error": True, "output": "cancelled"}, status_code=499)
+                if not done and (limit := await asyncio.to_thread(over_limit, workspace)):
+                    task.cancel()
+                    await asyncio.gather(task, return_exceptions=True)
+                    return await stop_over_limit(workspace, limit)
             if task.cancelled():
                 return JSONResponse({"error": True, "output": "this turn has ended"}, status_code=410)
             output, error = task.result()
+            if limit := await asyncio.to_thread(over_limit, workspace):
+                return await stop_over_limit(workspace, limit)
         finally:
             reap_strays()
         files = [f.wire() for f in runner.take_files(workspace)] if workspace else []
@@ -225,6 +272,7 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
         while len(ended) > 4096:
             del ended[next(iter(ended))]
         started.pop(workspace, None)
+        owners.pop(workspace, None)
         # Stop the turn's calls still in flight first, so none writes into or recreates the workspace after it.
         tasks = running.pop(workspace, set())
         for task in tasks:

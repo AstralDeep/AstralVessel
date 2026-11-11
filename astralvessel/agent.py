@@ -257,7 +257,7 @@ class Turn:
             return await self.services.call(tool, arguments, self.owner, timeout)
         if name in BUILTIN_TOOLS or name in {t.name for t in self.package.declared}:
             self.used_workspace = True
-            return await self.runner.run(name, arguments, self.workspace)
+            return await self.runner.run(name, arguments, self.workspace, owner=self.owner)
         return f"tool {name} does not exist", True
 
     async def _attach_files(self, call_id: str, output: str) -> str:

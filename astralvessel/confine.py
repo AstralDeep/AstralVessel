@@ -7,6 +7,7 @@ from __future__ import annotations
 import ctypes
 import os
 import platform
+import resource
 import struct
 import sys
 
@@ -115,19 +116,24 @@ def block_shared_ipc() -> None:
 
 
 def main(argv: list[str]) -> None:
-    scratch, readable = "", []
+    scratch, readable, fsize = "", [], 0
     while argv and argv[0] != "--":
         flag, value, argv = argv[0], argv[1], argv[2:]
         if flag == "--scratch":
             scratch = value
         elif flag == "--read":
             readable.append(value)
+        elif flag == "--fsize":
+            fsize = int(value)
         else:
             raise SystemExit(f"unknown flag {flag}")
     command = argv[1:]
     if not scratch or not command:
         raise SystemExit("usage: confine --scratch DIR [--read PATH]... -- argv...")
     try:
+        if fsize:
+            # No single file the call writes may outgrow the turn's disk limit.
+            resource.setrlimit(resource.RLIMIT_FSIZE, (fsize, fsize))
         apply(scratch, readable)
     except OSError:
         sys.stderr.write("the sandbox could not confine this call\n")

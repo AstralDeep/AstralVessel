@@ -116,6 +116,13 @@ check "an outbox swapped for a link exposes nothing" probe "
     got = r.take_files('$E')
     await r.end_turn('$E')
     return got == [] and 'not a folder' in out"
+F=ffffffffffffffffffffffffffffffff
+check "a turn over its disk limit is stopped and emptied" probe "
+    cmd = 'head -c 20000000 /dev/zero > \$TMPDIR/a; head -c 20000000 /dev/zero > \$TMPDIR/b; sleep 3'
+    out, failed = await r.run('bash', {'command': cmd}, '$F', owner='probe-user')
+    left, _ = await r.run('bash', {'command': 'ls \$TMPDIR | wc -l'}, '$F', owner='probe-user')
+    await r.end_turn('$F')
+    return failed and 'disk limit' in out and left.startswith('1')"
 check "the sandbox refuses a malformed workspace key"  probe "
     out, failed = await r.run('bash', {'command': 'true'}, '../../etc')
     return failed and 'HTTP 400' in out"
