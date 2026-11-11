@@ -66,17 +66,37 @@ def check(name: str, data: bytes, allowed: list[str]) -> tuple[str | None, str]:
 
 def collect(outbox: str, allowed: list[str]) -> tuple[list[ToolFile], list[str]]:
     # Take every entry out of the outbox, keeping the regular files that pass the checks; the rest are refused.
+    # The call controls the outbox, so everything goes through a descriptor opened without following links.
     files: list[ToolFile] = []
     notes: list[str] = []
     try:
-        names = sorted(os.listdir(outbox))
+        parent = os.open(os.path.dirname(outbox), os.O_RDONLY | os.O_DIRECTORY)
     except OSError:
         return files, notes
-    for name in names:
-        path = os.path.join(outbox, name)
+    try:
+        try:
+            box = os.open(os.path.basename(outbox), os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+        except FileNotFoundError:
+            return files, notes
+        except OSError:
+            _remove(os.path.basename(outbox), parent)
+            return files, ["[not attached: the outbox was replaced by something that is not a folder]"]
+        try:
+            _drain(box, allowed, files, notes)
+        finally:
+            os.close(box)
+    finally:
+        os.close(parent)
+    if len(notes) > MAX_NOTES:
+        notes[MAX_NOTES - 1:] = [f"[{len(notes) - MAX_NOTES + 1} more entries not attached]"]
+    return files, notes
+
+
+def _drain(box: int, allowed: list[str], files: list[ToolFile], notes: list[str]) -> None:
+    for name in sorted(os.listdir(box)):
         data, reason = None, ""
         try:
-            info = os.lstat(path)
+            info = os.lstat(name, dir_fd=box)
             if not stat.S_ISREG(info.st_mode):
                 reason = "not a regular file"
             elif info.st_size > MAX_FILE_BYTES:
@@ -85,7 +105,7 @@ def collect(outbox: str, allowed: list[str]) -> tuple[list[ToolFile], list[str]]
                 reason = f"at most {MAX_FILES_PER_CALL} files per call"
             else:
                 # A process the call left running could swap the file for a FIFO or link after the lstat.
-                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=box)
                 with os.fdopen(fd, "rb") as handle:
                     if stat.S_ISREG(os.fstat(fd).st_mode):
                         data = handle.read(MAX_FILE_BYTES + 1)
@@ -94,16 +114,13 @@ def collect(outbox: str, allowed: list[str]) -> tuple[list[ToolFile], list[str]]
         except OSError:
             reason = "could not be read"
         finally:
-            _remove(path)
+            _remove(name, box)
         if data is not None:
             media_type, reason = check(name, data, allowed)
             if media_type:
                 files.append(ToolFile(name, media_type, data))
                 continue
         notes.append(f"[not attached {name[:100]}: {reason}]")
-    if len(notes) > MAX_NOTES:
-        notes[MAX_NOTES - 1:] = [f"[{len(notes) - MAX_NOTES + 1} more entries not attached]"]
-    return files, notes
 
 
 def from_wire(items: Any, allowed: list[str]) -> list[ToolFile]:
@@ -124,12 +141,13 @@ def from_wire(items: Any, allowed: list[str]) -> list[ToolFile]:
     return files
 
 
-def _remove(path: str) -> None:
+def _remove(name: str, dir_fd: int) -> None:
+    # Relative to an open folder, never following a link; rmtree with dir_fd does not follow links either.
     with contextlib.suppress(OSError):
-        if os.path.isdir(path) and not os.path.islink(path):
-            shutil.rmtree(path, ignore_errors=True)
+        if stat.S_ISDIR(os.lstat(name, dir_fd=dir_fd).st_mode):
+            shutil.rmtree(name, dir_fd=dir_fd, ignore_errors=True)
         else:
-            os.unlink(path)
+            os.unlink(name, dir_fd=dir_fd)
 
 
 def size_text(count: int) -> str:

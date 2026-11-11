@@ -68,7 +68,7 @@ class LocalRunner:
             if found:
                 self.files.setdefault(workspace, []).extend(found)
             if notes:
-                output = "\n".join([output.rstrip(), *notes]).lstrip()
+                output = "\n".join([*notes, output])  # first, so clipping a long output keeps them
         return output, error
 
     async def end_turn(self, workspace: str) -> None:

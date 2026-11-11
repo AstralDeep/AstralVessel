@@ -109,6 +109,12 @@ check "the outbox refuses other types, big files and links" probe "
     got = r.take_files('$C')
     await r.end_turn('$C')
     return got == [] and out.count('[not attached') == 4 and 'root:' not in out"
+check "an outbox swapped for a link exposes nothing" probe "
+    r.file_types = ['csv']
+    out, _ = await r.run('bash', {'command': 'rmdir \$VESSEL_OUTBOX && ln -s /etc \$VESSEL_OUTBOX'}, '$C')
+    got = r.take_files('$C')
+    await r.end_turn('$C')
+    return got == [] and 'not a folder' in out"
 check "the sandbox refuses a malformed workspace key"  probe "
     out, failed = await r.run('bash', {'command': 'true'}, '../../etc')
     return failed and 'HTTP 400' in out"

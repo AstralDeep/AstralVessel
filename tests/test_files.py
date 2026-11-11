@@ -64,6 +64,34 @@ def test_a_flooded_outbox_gives_the_model_a_short_summary(tmp_path):
     assert os.listdir(tmp_path) == []
 
 
+def test_an_outbox_swapped_for_a_link_reads_and_deletes_nothing_outside(tmp_path):
+    victim = tmp_path / "victim"
+    (victim / "sub").mkdir(parents=True)
+    (victim / "secret.csv").write_text("password,hunter2\n")
+    (victim / "keep.txt").write_text("x")
+    workspace = tmp_path / "turn"
+    workspace.mkdir()
+    (workspace / "outbox").symlink_to(victim)
+    found, notes = outputs.collect(str(workspace / "outbox"), ["csv"])
+    assert found == [] and "not a folder" in notes[0] and not (workspace / "outbox").exists()
+    assert sorted(os.listdir(victim)) == ["keep.txt", "secret.csv", "sub"]
+
+
+@landlock
+async def test_a_call_that_replaces_its_outbox_does_not_break_the_next_call(package_dir, tmp_path):
+    allow_files(package_dir)
+    package = load_package(package_dir)
+    scratch = tmp_path / "calls"
+    scratch.mkdir()
+    runner = sandbox.LocalRunner(package, sandbox.confinement_for(package, str(scratch)))
+    out, failed = await runner.run("bash", {"command": "rmdir $VESSEL_OUTBOX && echo x > $VESSEL_OUTBOX"}, KEY)
+    assert not failed and "not a folder" in out
+    await runner.run("bash", {"command": "rmdir $VESSEL_OUTBOX && ln -s /nowhere $VESSEL_OUTBOX"}, KEY)
+    out, failed = await runner.run("bash", {"command": "printf 'a\\n' > $VESSEL_OUTBOX/t.csv && echo ok"}, KEY)
+    assert not failed and "ok" in out and [f.name for f in runner.take_files(KEY)] == ["t.csv"]
+    await runner.end_turn(KEY)
+
+
 def test_the_vessel_checks_files_again_when_they_arrive():
     wire = [outputs.ToolFile("chart.png", "image/png", PNG).wire(),
             {"name": "../../x.png", "data": base64.b64encode(PNG).decode()},
@@ -83,7 +111,7 @@ async def test_a_confined_call_returns_files_from_its_outbox(package_dir, tmp_pa
     runner = sandbox.LocalRunner(package, sandbox.confinement_for(package, str(scratch)))
     out, failed = await runner.run("bash", {"command": "printf 'a,b\\n1,2\\n' > $VESSEL_OUTBOX/t.csv; "
                                                        "echo x > $VESSEL_OUTBOX/n.txt; echo done"}, KEY)
-    assert not failed and out.startswith("done") and "[not attached n.txt" in out
+    assert not failed and out.startswith("[not attached n.txt") and "done" in out
     [found] = runner.take_files(KEY)
     assert (found.name, found.data) == ("t.csv", b"a,b\n1,2\n") and runner.take_files(KEY) == []
     out, _ = await runner.run("bash", {"command": "ls $VESSEL_OUTBOX | wc -l"}, KEY)

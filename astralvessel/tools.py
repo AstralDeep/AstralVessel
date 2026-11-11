@@ -143,7 +143,7 @@ async def _proc(argv: list[str], *, cwd: str, timeout: int, shell: bool = False,
             scratch = confinement.workspace
             env["VESSEL_OUTBOX"] = outbox_of(scratch)
             os.makedirs(scratch, mode=0o700, exist_ok=True)
-            os.makedirs(env["VESSEL_OUTBOX"], mode=0o700, exist_ok=True)
+            _fresh_outbox(env["VESSEL_OUTBOX"])
         else:
             scratch = tempfile.mkdtemp(prefix="call-", dir=confinement.scratch_root)
         env.update(HOME=scratch, TMPDIR=scratch)
@@ -352,6 +352,15 @@ async def run_sandbox_tool(name: str, args: dict[str, Any], *, workdir: str, tim
     except Exception:  # noqa: BLE001  any other failure becomes a generic tool error, never raw text
         return f"{name} failed", True
     return f"unknown tool {name}", True
+
+
+def _fresh_outbox(path: str) -> None:
+    # An earlier call may have replaced the outbox with a file or link; put a real folder back.
+    with contextlib.suppress(OSError):
+        if not os.path.isdir(path) or os.path.islink(path):
+            os.unlink(path)
+    with contextlib.suppress(OSError):
+        os.mkdir(path, 0o700)
 
 
 def outbox_of(workspace: str) -> str:
