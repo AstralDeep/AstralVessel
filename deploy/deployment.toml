@@ -6,7 +6,7 @@ public_url = "http://vessel:8700"
 task_ttl_hours = 24
 
 [egress]
-upstream_url = "https://api-llm-factory.ai.uky.edu/v1"
+upstream_url = "env:VESSEL_UPSTREAM_MODEL_URL"
 upstream_key = "env:VESSEL_UPSTREAM_MODEL_KEY"
 
 [[agents]]

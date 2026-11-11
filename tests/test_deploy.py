@@ -24,6 +24,8 @@ WEB_APP = '[[apps]]\nname = "web"\nkey_sha256 = "env:WEB_KEY_SHA256"\nagents = [
 
 def deployment_text(package, mounts='mounts = [{ target = "/data", source = "env:DATA_DIR" }]', apps=WEB_APP) -> str:
     return f"""
+[egress]
+upstream_url = "https://models.test/v1"
 [[agents]]
 id = "guide"
 package = "{package}"
@@ -305,3 +307,43 @@ def test_a_second_project_keeps_its_own_images_and_folder(package_dir, tmp_path)
     path.write_text(deployment_text(package_dir, mounts=""))
     with pytest.raises(SystemExit, match="infocus"):
         write(load_deployment(path), out, repo_root=None, master_token="m" * 16)
+
+
+def test_the_model_endpoint_is_required_and_may_come_from_the_environment(package_dir, tmp_path):
+    path = tmp_path / "deployment.toml"
+    path.write_text(deployment_text(package_dir, mounts="").replace('upstream_url = "https://models.test/v1"\n', ""))
+    with pytest.raises(ValueError, match="upstream_url"):
+        load_deployment(path)
+    for bad in ('"ftp://x"', '"env:"', '"http://"', '"https://x y"'):
+        path.write_text(deployment_text(package_dir, mounts="").replace('"https://models.test/v1"', bad))
+        with pytest.raises(ValueError, match="http"):
+            load_deployment(path)
+    path.write_text(deployment_text(package_dir, mounts="").replace('"https://models.test/v1"', '"HTTPS://m.test/v1"'))
+    load_deployment(path)
+    path.write_text(deployment_text(package_dir, mounts="").replace('"https://models.test/v1"', '"env:MODEL_URL"'))
+    egress = generate(load_deployment(path), repo_root=None)["services"]["egress"]["environment"]
+    assert egress["LLM_BASE_URL"].startswith("${MODEL_URL:?")
+
+
+
+def test_an_issuer_key_file_is_mounted_into_the_vessel(package_dir, tmp_path, monkeypatch):
+    (tmp_path / "keys.json").write_text('{"keys": []}')
+    path = tmp_path / "deployment.toml"
+    path.write_text(deployment_text(package_dir, mounts="", apps="") + '[[issuers]]\nid = "astral"\nissuer = "https://i.test"\n'
+                    'audience = "a"\njwks_file = "keys.json"\nagents = ["guide"]\n')
+    vessel = generate(load_deployment(path), repo_root=None)["services"]["vessel"]
+    assert f"{tmp_path / 'keys.json'}:/deploy-keys/astral.json:ro" in vessel["volumes"]
+    assert vessel["environment"]["VESSEL_JWKS_DIR"] == "/deploy-keys"
+    inside = tmp_path / "deploy-keys"  # stands in for the container's mount point
+    inside.mkdir()
+    (inside / "astral.json").write_text('{"keys": []}')
+    monkeypatch.setenv("VESSEL_JWKS_DIR", str(inside))
+    assert load_deployment(path).issuers[0].jwks_file == f"{inside}/astral.json"
+    from astralvessel.compose import inputs_hash
+    monkeypatch.delenv("VESSEL_JWKS_DIR")
+    before = inputs_hash(load_deployment(path))
+    (tmp_path / "keys.json").write_text('{"keys": [{"kid": "new"}]}')
+    assert inputs_hash(load_deployment(path)) != before  # a new key recreates the vessel on up -d
+    (tmp_path / "keys.json").unlink()
+    with pytest.raises(ValueError, match="not a file"):
+        load_deployment(path)

@@ -145,7 +145,7 @@ class FileRunner(sandbox.LocalRunner):
         super().__init__(package)
         self.count = count
 
-    async def run(self, name, args, workspace=None):
+    async def run(self, name, args, workspace=None, owner=""):
         return "made", False
 
     def take_files(self, workspace):
@@ -156,7 +156,8 @@ class FileRunner(sandbox.LocalRunner):
 def file_vessel(package_dir, model, tmp_path):
     allow_files(package_dir)
     path = tmp_path / "deployment.toml"
-    path.write_text(f'[vessel]\npublic_url = "http://vessel.test"\n[[agents]]\nid = "tester"\npackage = '
+    path.write_text('[vessel]\npublic_url = "http://vessel.test"\n[egress]\nupstream_url = "https://models.test/v1"\n'
+                    f'[[agents]]\nid = "tester"\npackage = '
                     f'"{package_dir}"\n[[apps]]\nname = "web"\nkey_sha256 = '
                     f'"{__import__("hashlib").sha256(APP_KEY.encode()).hexdigest()}"\nagents = ["tester"]\n')
     deployment = load_deployment(path)
@@ -205,7 +206,7 @@ async def test_the_model_sees_attached_files_even_when_the_output_is_clipped(pac
     package = load_package(package_dir)
     runner = FileRunner(package, 1)
 
-    async def flood(name, args, workspace=None):
+    async def flood(name, args, workspace=None, owner=""):
         return "x" * (package.manifest.sandbox.tool_output_chars * 2), False
 
     runner.run = flood

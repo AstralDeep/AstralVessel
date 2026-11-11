@@ -15,7 +15,9 @@ FRONT=$(dc exec -T vessel printenv VESSEL_HOST)  # this deployment's front addre
 
 check "sandbox has no route to the internet"            not_reach $SB 1.1.1.1 443
 check "sandbox cannot resolve or reach egress"          not_reach $SB egress 8080
-check "sandbox cannot reach the model host directly"    not_reach $SB api-llm-factory.ai.uky.edu 443
+MODEL_HOST=$(dc exec -T egress python -c 'import os,urllib.parse; print(urllib.parse.urlsplit(os.environ["LLM_BASE_URL"]).hostname)')
+check "the model host is known to the probes"         test -n "$MODEL_HOST"
+check "sandbox cannot reach the model host directly"    not_reach $SB "$MODEL_HOST" 443
 check "sandbox cannot reach the harness API"            not_reach $SB vessel 8700
 check "sandbox cannot reach the harness's front address" not_reach $SB $FRONT 8700
 check "one agent's sandbox cannot reach another's"      not_reach $SB sandbox-field-guide-reader 8710
@@ -117,6 +119,13 @@ check "an outbox swapped for a link exposes nothing" probe "
     got = r.take_files('$E')
     await r.end_turn('$E')
     return got == [] and 'not a folder' in out"
+F=ffffffffffffffffffffffffffffffff
+check "a turn over its disk limit is stopped and emptied" probe "
+    cmd = 'head -c 20000000 /dev/zero > \$TMPDIR/a; head -c 20000000 /dev/zero > \$TMPDIR/b; sleep 3'
+    out, failed = await r.run('bash', {'command': cmd}, '$F', owner='probe-user')
+    left, _ = await r.run('bash', {'command': 'ls \$TMPDIR | wc -l'}, '$F', owner='probe-user')
+    await r.end_turn('$F')
+    return failed and 'disk limit' in out and left.startswith('1')"
 check "the sandbox refuses a malformed workspace key"  probe "
     out, failed = await r.run('bash', {'command': 'true'}, '../../etc')
     return failed and 'HTTP 400' in out"

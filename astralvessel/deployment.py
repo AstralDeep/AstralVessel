@@ -8,9 +8,11 @@ import hmac
 import ipaddress
 import json
 import os
+import re
 import tomllib
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -40,8 +42,21 @@ class VesselSection(Strict):
 
 
 class EgressSection(Strict):
-    upstream_url: str = "https://api-llm-factory.ai.uky.edu/v1"
+    # The OpenAI-compatible model endpoint (an http(s) URL, or "env:NAME"); there is no default provider.
+    upstream_url: str
     upstream_key: str = "env:VESSEL_UPSTREAM_MODEL_KEY"
+
+    @model_validator(mode="after")
+    def endpoint(self) -> EgressSection:
+        url = self.upstream_url
+        if url.startswith("env:"):
+            ok = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", url[4:]) is not None
+        else:
+            parts = urlsplit(url)
+            ok = parts.scheme.lower() in ("http", "https") and bool(parts.hostname) and not re.search(r"\s", url)
+        if not ok:
+            raise ValueError("egress upstream_url must be an http(s) URL with a host, or env:NAME")
+        return self
 
 
 class SearchSection(Strict):
@@ -62,6 +77,32 @@ class SandboxProfile(Strict):
     cpus: float = Field(default=2, gt=0)
     pids: int = Field(default=512, ge=32)
     scratch: str = "256m"
+    # Disk a turn's workspace, and all of one user's live turns together, may hold inside scratch.
+    turn_disk: str | None = None  # default: a quarter of scratch
+    user_disk: str | None = None  # default: half of scratch, so one user cannot fill it
+
+    @model_validator(mode="after")
+    def disk_fits(self) -> SandboxProfile:
+        scratch, turn, user = size_bytes(self.scratch), self.turn_bytes, self.user_bytes
+        if not 0 < turn <= user <= scratch:
+            raise ValueError("need 0 < turn_disk <= user_disk <= scratch")
+        return self
+
+    @property
+    def turn_bytes(self) -> int:
+        return size_bytes(self.turn_disk) if self.turn_disk else size_bytes(self.scratch) // 4
+
+    @property
+    def user_bytes(self) -> int:
+        return size_bytes(self.user_disk) if self.user_disk else size_bytes(self.scratch) // 2
+
+
+def size_bytes(text: str) -> int:
+    # Docker-style sizes: "512k", "64m", "2g", or plain bytes.
+    match = re.fullmatch(r"(\d+)([bkmg]?)", text.strip().lower())
+    if not match:
+        raise ValueError(f"size {text!r} must look like 64m or 2g")
+    return int(match[1]) * 1024 ** "bkmg".index(match[2] or "b")
 
 
 class ServiceGrant(Strict):
@@ -129,7 +170,7 @@ class IssuerEntry(Strict):
 
 class DeploymentFile(Strict):
     vessel: VesselSection = VesselSection()
-    egress: EgressSection = EgressSection()
+    egress: EgressSection
     search: SearchSection = SearchSection()
     agents: list[AgentEntry]
     apps: list[AppEntry] = []
@@ -207,8 +248,14 @@ def load_deployment(path: str | Path, packages_root: str | None = None) -> Deplo
                 raise ValueError(f"agent {entry.id}: prompt_append {name} must be a file inside the package")
         agents[entry.id] = Agent(id=entry.id, package=package, host_package=host, profile=entry.sandbox,
                                  services=entry.services, prompt_append=tuple(entry.prompt_append))
-    issuers = [i.model_copy(update={"jwks_file": str((path.parent / i.jwks_file).resolve())}) if i.jwks_file else i
+    # Inside the vessel container each key file is mounted at <VESSEL_JWKS_DIR>/<issuer id>.json.
+    jwks_dir = os.environ.get("VESSEL_JWKS_DIR")
+    issuers = [i.model_copy(update={"jwks_file": f"{jwks_dir}/{i.id}.json" if jwks_dir
+                                    else str((path.parent / i.jwks_file).resolve())}) if i.jwks_file else i
                for i in raw.issuers]
+    for issuer in issuers:
+        if issuer.jwks_file and not Path(issuer.jwks_file).is_file():
+            raise ValueError(f"issuer {issuer.id}: jwks_file {issuer.jwks_file} is not a file")
     return Deployment(path=path, vessel=raw.vessel, egress=raw.egress, search=raw.search, agents=agents,
                       apps=raw.apps, issuers=issuers)
 

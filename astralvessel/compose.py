@@ -11,9 +11,10 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
-from .deployment import Deployment, egress_token, sandbox_token
+from .deployment import Deployment, egress_token, sandbox_token, size_bytes
 
 IMAGE = "astralvessel:local"
+JWKS_DIR = "/deploy-keys"
 REGISTRY = "ghcr.io/astraldeep"
 SANDBOX_PORT = 8710
 SEARXNG_IMAGE = "searxng/searxng:2026.10.25-54ca1d9cf"
@@ -101,7 +102,7 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
             vessel_env[value[4:]] = _env_ref(value)
     services: dict[str, Any] = {
         "egress": {**HARDENED, **_image(repo_root and repo_root / "egress", "astralvessel-egress", project),
-                   "environment": {"LLM_BASE_URL": deployment.egress.upstream_url,
+                   "environment": {"LLM_BASE_URL": _env_ref(deployment.egress.upstream_url),
                                    "LLM_API_KEY": _env_ref(deployment.egress.upstream_key)},
                    "env_file": [".generated/egress.env"],
                    "networks": ["egress", "outside"], "mem_limit": "512m", "pids_limit": 128},
@@ -124,6 +125,10 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
             "networks": ["egress"], "mem_limit": "512m", "pids_limit": 128, "depends_on": ["egress"],
         }
     vessel_volumes = [f"{deployment.path}:/deploy/deployment.toml:ro", "vessel_data:/data"]
+    keyed = [issuer for issuer in deployment.issuers if issuer.jwks_file]
+    vessel_volumes += [f"{issuer.jwks_file}:{JWKS_DIR}/{issuer.id}.json:ro" for issuer in keyed]
+    if keyed:
+        vessel_env["VESSEL_JWKS_DIR"] = JWKS_DIR
     vessel_networks: dict[str, Any] = {"front": {"ipv4_address": deployment.vessel.front_address}, "egress": {}}
     for agent_id, agent in deployment.agents.items():
         tools = f"tools-{agent_id}"
@@ -145,10 +150,14 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
             **HARDENED, **image,
             "command": ["astralvessel", "sandbox"],
             "environment": {"VESSEL_PACKAGE": "/agent", "VESSEL_PORT": str(SANDBOX_PORT),
-                            "VESSEL_PROFILE_HASH": agent.fingerprint},
+                            "VESSEL_PROFILE_HASH": agent.fingerprint,
+                            "VESSEL_TURN_DISK": str(agent.profile.turn_bytes),
+                            "VESSEL_USER_DISK": str(agent.profile.user_bytes)},
             "env_file": [f".generated/sandbox-{agent_id}.env"],
             "volumes": mounts,
-            "tmpfs": [f"/tmp:size={agent.profile.scratch},noexec,nosuid,nodev,mode=1777"],
+            # One inode per KB of scratch, matching the charge per entry, so empty files cannot exhaust memory.
+            "tmpfs": [f"/tmp:size={agent.profile.scratch},nr_inodes={size_bytes(agent.profile.scratch) // 1024},"
+                      "noexec,nosuid,nodev,mode=1777"],
             "networks": [tools],
             "mem_limit": agent.profile.memory, "cpus": agent.profile.cpus, "pids_limit": agent.profile.pids,
             "labels": {"astralvessel.agent": agent_id, "astralvessel.profile": agent.fingerprint},
@@ -175,8 +184,11 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
 
 
 def inputs_hash(deployment: Deployment) -> str:
+    # Issuer key files count too: a single-file mount keeps the old file after a rename, so a new key needs a recreate.
     body = {"deployment": hashlib.sha256(deployment.path.read_bytes()).hexdigest(),
-            "agents": {agent_id: agent.fingerprint for agent_id, agent in deployment.agents.items()}}
+            "agents": {agent_id: agent.fingerprint for agent_id, agent in deployment.agents.items()},
+            "keys": {i.id: hashlib.sha256(Path(i.jwks_file).read_bytes()).hexdigest()
+                     for i in deployment.issuers if i.jwks_file}}
     return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:16]
 
 

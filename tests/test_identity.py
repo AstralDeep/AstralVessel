@@ -47,6 +47,8 @@ def vessel(package_dir, model, tmp_path, keys):
     (tmp_path / "b.json").write_text(json.dumps({"keys": [jwk(keys["b"], "b1")]}))
     path = tmp_path / "deployment.toml"
     path.write_text(f"""
+[egress]
+upstream_url = "https://models.test/v1"
 [[agents]]
 id = "tester"
 package = "{package_dir}"
@@ -138,7 +140,8 @@ async def test_scopes_narrow_the_tools_a_turn_may_use(vessel, keys, model):
 
 
 def test_issuer_settings_are_checked(package_dir, tmp_path):
-    base = f'[[agents]]\nid = "tester"\npackage = "{package_dir}"\n'
+    base = ('[egress]\nupstream_url = "https://models.test/v1"\n'
+            f'[[agents]]\nid = "tester"\npackage = "{package_dir}"\n')
     for issuer in ('id = "x"\nissuer = "i"\naudience = "a"\njwks_file = "k.json"\nalgorithms = ["HS256"]\nagents = []',
                    'id = "x"\nissuer = "i"\naudience = "a"\nagents = []',
                    'id = "x"\nissuer = "i"\naudience = "a"\njwks_url = "http://keys.test"\nagents = []'):
@@ -170,7 +173,8 @@ async def test_odd_issuer_claims_are_refused_not_crashed(vessel, keys):
 
 def test_duplicate_issuers_are_refused(package_dir, tmp_path):
     entry = f'[[issuers]]\nissuer = "{ISS_A}"\naudience = "a"\njwks_file = "k.json"\nagents = []\n'
-    (tmp_path / "d.toml").write_text(f'[[agents]]\nid = "tester"\npackage = "{package_dir}"\n'
+    (tmp_path / "d.toml").write_text('[egress]\nupstream_url = "https://models.test/v1"\n'
+                                     f'[[agents]]\nid = "tester"\npackage = "{package_dir}"\n'
                                      + entry.replace("[[issuers]]\n", '[[issuers]]\nid = "one"\n')
                                      + entry.replace("[[issuers]]\n", '[[issuers]]\nid = "two"\n'))
     with pytest.raises(ValueError, match="unique"):

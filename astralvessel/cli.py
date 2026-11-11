@@ -25,6 +25,7 @@ def deploy(args: argparse.Namespace) -> None:
     env_file = Path(args.env_file) if args.env_file else deployment_path.parent / ".env"
     if env_file.exists():
         _load_env_file(env_file)
+    os.environ.pop("VESSEL_JWKS_DIR", None)  # only the vessel container sets it; deploy needs host paths
     master = os.environ.get("VESSEL_SANDBOX_TOKEN", "")
     if len(master) < 16:
         raise SystemExit("set VESSEL_SANDBOX_TOKEN (16+ characters) in the environment or the env file")

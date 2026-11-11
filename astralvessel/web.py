@@ -13,7 +13,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import httpx
 
 MAX_BYTES = 4 * 1024 * 1024
-USER_AGENT = "AstralVessel/0.1 (+https://github.com/EvanDamron/AstralVessel)"
+USER_AGENT = "AstralVessel (+https://github.com/AstralDeep/AstralVessel)"
 
 
 class _Text(HTMLParser):
