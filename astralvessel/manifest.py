@@ -71,6 +71,8 @@ class ToolsSection(Strict):
 
 class OutputSection(Strict):
     primitives: bool = False
+    # File types a tool may return by writing into $VESSEL_OUTBOX; none unless listed.
+    files: list[Literal["png", "svg", "csv", "pdf"]] = []
 
 
 class Manifest(Strict):

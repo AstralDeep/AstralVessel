@@ -12,9 +12,12 @@ TOOL_STARTED = "tool.started"
 TOOL_FINISHED = "tool.finished"
 STEP_FINISHED = "step.finished"
 TURN_FINISHED = "turn.finished"
+# Carries a tool's file as bytes; the server sends it as an artifact, never as a status message.
+FILE_ADDED = "file.added"
 
 EVENT_TYPES = (
     TURN_STARTED, TEXT_DELTA, REASONING_DELTA, TOOL_STARTED, TOOL_FINISHED, STEP_FINISHED, TURN_FINISHED,
+    FILE_ADDED,
 )
 
 STATUS_OK = "ok"

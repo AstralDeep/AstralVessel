@@ -94,6 +94,21 @@ turns_ended() {
   py $SB 'import glob,sys; sys.exit(1 if glob.glob("/tmp/vessel-calls/turn-*") else 0)'
 }
 check "a turn's workspace is gone once it ends"        turns_ended
+C=cccccccccccccccccccccccccccccccc
+check "a file a call writes to its outbox reaches the vessel" probe "
+    r.file_types = ['csv', 'png']
+    out, failed = await r.run('bash', {'command': 'printf \x27a,b\\\\n1,2\\\\n\x27 > \$VESSEL_OUTBOX/t.csv'}, '$C')
+    got = r.take_files('$C')
+    await r.end_turn('$C')
+    return not failed and [(f.name, f.data) for f in got] == [('t.csv', b'a,b\\n1,2\\n')]"
+check "the outbox refuses other types, big files and links" probe "
+    r.file_types = ['csv', 'png']
+    cmd = ('head -c 5000000 /dev/zero | tr \x27\\\\0\x27 a > \$VESSEL_OUTBOX/big.csv; echo x > \$VESSEL_OUTBOX/run.sh; '
+           'ln -s /etc/passwd \$VESSEL_OUTBOX/p.csv; printf x > \$VESSEL_OUTBOX/fake.png')
+    out, _ = await r.run('bash', {'command': cmd}, '$C')
+    got = r.take_files('$C')
+    await r.end_turn('$C')
+    return got == [] and out.count('[not attached') == 4 and 'root:' not in out"
 check "the sandbox refuses a malformed workspace key"  probe "
     out, failed = await r.run('bash', {'command': 'true'}, '../../etc')
     return failed and 'HTTP 400' in out"

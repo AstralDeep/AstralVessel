@@ -13,6 +13,7 @@ from datetime import date
 from typing import Any
 
 from . import events as ev
+from . import files as outputs
 from .manifest import BUILTIN_TOOLS, AgentPackage
 from .model import ModelClient, ModelError, StepResult
 from .primitives import PRESENT_DESCRIPTION, PRESENT_PARAMETERS, validate_components
@@ -85,6 +86,7 @@ class Turn:
             self.allowed = {name for name in self.allowed if scopes.get(name) in tool_scopes}
         self.new_messages: list[dict[str, Any]] = []
         self.components: list[dict[str, Any]] = []
+        self.files: list[dict[str, Any]] = []
         self.tokens = {"input": 0, "output": 0}
         self.steps = 0
         self.answer = ""
@@ -117,6 +119,7 @@ class Turn:
             "status": status,
             "text": self.answer,
             "components": self.components,
+            "files": self.files,
             "tokens": dict(self.tokens),
             "steps": self.steps,
             "elapsed_ms": int((time.monotonic() - started) * 1000),
@@ -207,6 +210,7 @@ class Turn:
         else:
             try:
                 output, failed = await self._dispatch(name, arguments)
+                output = await self._attach_files(call_id, output)
             except BaseException:
                 # A cancel or the deadline stopped the tool; still close the event pair before unwinding.
                 with contextlib.suppress(Exception):
@@ -246,6 +250,20 @@ class Turn:
         if name in BUILTIN_TOOLS or name in {t.name for t in self.package.declared}:
             return await self.runner.run(name, arguments, self.workspace)
         return f"tool {name} does not exist", True
+
+    async def _attach_files(self, call_id: str, output: str) -> str:
+        notes = []
+        for item in self.runner.take_files(self.workspace):
+            used = sum(f["bytes"] for f in self.files)
+            if len(self.files) >= outputs.MAX_FILES_PER_TURN or used + len(item.data) > outputs.MAX_TURN_BYTES:
+                notes.append(f"[not attached {item.name}: this turn has returned all the files it may]")
+                continue
+            self.files.append({"name": item.name, "media_type": item.media_type, "bytes": len(item.data)})
+            await self.emit(ev.event(ev.FILE_ADDED, call_id=call_id, name=item.name, media_type=item.media_type,
+                                     data=item.data))
+            notes.append(f"[attached {item.name} ({item.media_type}, {outputs.size_text(len(item.data))}) "
+                         "to the answer]")
+        return "\n".join([output.rstrip(), *notes]).lstrip() if notes else output
 
     def _close_dangling_calls(self) -> None:
         answered = {m["tool_call_id"] for m in self.new_messages if m["role"] == "tool"}

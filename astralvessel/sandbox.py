@@ -16,6 +16,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from . import confine as landlock
+from . import files as outputs
 from .manifest import AgentPackage, load_package
 from .tools import (
     ACTIVE_SESSIONS,
@@ -23,6 +24,7 @@ from .tools import (
     WORKSPACE_KEY,
     Confinement,
     end_workspace,
+    outbox_of,
     run_sandbox_tool,
     sweep_workspaces,
 )
@@ -35,6 +37,8 @@ class ToolRunner(Protocol):
     async def run(self, name: str, args: dict[str, Any], workspace: str | None = None) -> tuple[str, bool]: ...
 
     async def end_turn(self, workspace: str) -> None: ...
+
+    def take_files(self, workspace: str) -> list[outputs.ToolFile]: ...
 
     async def close(self) -> None: ...
 
@@ -50,23 +54,38 @@ class LocalRunner:
         self.package = package
         self.declared = {t.name: t for t in package.declared if t.command}  # service tools never run here
         self.confinement = confinement
+        self.files: dict[str, list[outputs.ToolFile]] = {}
 
     async def run(self, name: str, args: dict[str, Any], workspace: str | None = None) -> tuple[str, bool]:
         sandbox = self.package.manifest.sandbox
         workdir = os.environ.get("VESSEL_WORKDIR") or sandbox.workdir
-        return await run_sandbox_tool(name, args, workdir=workdir, timeout=sandbox.tool_timeout_seconds,
-                                      declared=self.declared, package_root=str(self.package.root),
-                                      confinement=self.confinement, workspace=workspace)
+        output, error = await run_sandbox_tool(name, args, workdir=workdir, timeout=sandbox.tool_timeout_seconds,
+                                               declared=self.declared, package_root=str(self.package.root),
+                                               confinement=self.confinement, workspace=workspace)
+        if workspace and self.confinement is not None and WORKSPACE_KEY.fullmatch(workspace):
+            outbox = outbox_of(self.confinement.for_turn(workspace).workspace)
+            found, notes = await asyncio.to_thread(outputs.collect, outbox, self.package.manifest.output.files)
+            if found:
+                self.files.setdefault(workspace, []).extend(found)
+            if notes:
+                output = "\n".join([output.rstrip(), *notes]).lstrip()
+        return output, error
 
     async def end_turn(self, workspace: str) -> None:
+        self.files.pop(workspace, None)
         end_workspace(self.confinement, workspace)
+
+    def take_files(self, workspace: str) -> list[outputs.ToolFile]:
+        return self.files.pop(workspace, [])
 
     async def close(self) -> None:
         return None
 
 
 class RemoteRunner:
-    def __init__(self, url: str, token: str, timeout: int):
+    def __init__(self, url: str, token: str, timeout: int, file_types: list[str] | None = None):
+        self.file_types = file_types or []
+        self.files: dict[str, list[outputs.ToolFile]] = {}
         self._client = httpx.AsyncClient(base_url=url.rstrip("/"), headers={"Authorization": f"Bearer {token}"},
                                          timeout=httpx.Timeout(timeout + 15, connect=10))
 
@@ -85,9 +104,16 @@ class RemoteRunner:
         if response.status_code != 200:
             return f"the sandbox refused the call (HTTP {response.status_code})", True
         body = response.json()
+        found = outputs.from_wire(body.get("files"), self.file_types) if workspace else []
+        if found:
+            self.files.setdefault(workspace, []).extend(found)
         return str(body.get("output", "")), bool(body.get("error"))
 
+    def take_files(self, workspace: str) -> list[outputs.ToolFile]:
+        return self.files.pop(workspace, [])
+
     async def end_turn(self, workspace: str) -> None:
+        self.files.pop(workspace, None)
         try:
             await self._client.post("/end", json={"workspace": workspace}, timeout=10)
         except httpx.HTTPError:
@@ -167,7 +193,8 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
             output, error = task.result()
         finally:
             reap_strays()
-        return JSONResponse({"output": output, "error": error})
+        files = [f.wire() for f in runner.take_files(workspace)] if workspace else []
+        return JSONResponse({"output": output, "error": error, "files": files})
 
     async def end(request: Request) -> JSONResponse:
         if not authorized(request):
