@@ -1,19 +1,25 @@
-# Weekly update pull requests for the Python dependencies, the Docker base images, and the pinned Actions.
+# Weekly update pull requests for the Python dependencies, the Docker base images, and the pinned Actions, grouped
+# into at most one pull request per ecosystem each week so reviews stay few.
 version: 2
 updates:
   - package-ecosystem: pip
-    directory: /
+    directories: [/, /egress]
     schedule:
       interval: weekly
-  - package-ecosystem: pip
-    directory: /egress
-    schedule:
-      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
   - package-ecosystem: docker
     directories: [/, /egress]
     schedule:
       interval: weekly
+    groups:
+      docker:
+        patterns: ["*"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
       interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
