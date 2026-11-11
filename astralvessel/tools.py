@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any
 
 from . import confine as landlock
+from .files import OUTBOX
 from .manifest import DeclaredTool
 
 SANDBOX_TOOLS = ("read", "grep", "glob", "list", "bash")
@@ -139,12 +140,15 @@ async def _proc(argv: list[str], *, cwd: str, timeout: int, shell: bool = False,
         argv = ["/bin/sh", "-c", argv[0]]
     env, scratch = SAFE_ENV, None
     if confinement is not None:
+        env = {**SAFE_ENV}
         if confinement.workspace:
             scratch = confinement.workspace
+            env["VESSEL_OUTBOX"] = outbox_of(scratch)
             os.makedirs(scratch, mode=0o700, exist_ok=True)
+            _fresh_outbox(env["VESSEL_OUTBOX"])
         else:
             scratch = tempfile.mkdtemp(prefix="call-", dir=confinement.scratch_root)
-        env = {**SAFE_ENV, "HOME": scratch, "TMPDIR": scratch}
+        env.update(HOME=scratch, TMPDIR=scratch)
         flags = [f for root in confinement.readable for f in ("--read", root)]
         argv = [sys.executable, "-I", "-S", landlock.__file__, "--scratch", scratch, *flags, "--", *argv]
     try:
@@ -379,6 +383,19 @@ async def run_sandbox_tool(name: str, args: dict[str, Any], *, workdir: str, tim
     except Exception:  # noqa: BLE001  any other failure becomes a generic tool error, never raw text
         return f"{name} failed", True
     return f"unknown tool {name}", True
+
+
+def _fresh_outbox(path: str) -> None:
+    # An earlier call may have replaced the outbox with a file or link; put a real folder back.
+    with contextlib.suppress(OSError):
+        if not os.path.isdir(path) or os.path.islink(path):
+            os.unlink(path)
+    with contextlib.suppress(OSError):
+        os.mkdir(path, 0o700)
+
+
+def outbox_of(workspace: str) -> str:
+    return os.path.join(workspace, OUTBOX)
 
 
 def end_workspace(confinement: Confinement | None, workspace: str) -> None:

@@ -52,6 +52,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from . import events as ev
+from . import files as outputs
 from . import transcript
 from .agent import Turn
 from .deployment import Agent, AppEntry, Deployment, load_deployment, resolve, sandbox_token
@@ -174,10 +175,11 @@ class VesselTaskStore(DatabaseTaskStore):
             keep.append(message)
         del task.history[:]
         task.history.extend(keep)
-        # The transcript artifact is for the live stream (the app stores it). Persisting it meant rewriting every
-        # tool output and attached image on each event, which stalled the vessel for image turns.
+        # The transcript and file artifacts are for the live stream (the app stores them). Persisting them meant
+        # rewriting every tool output, image and file on each event, which stalled the vessel for image turns.
         stored = Task(id=task.id, context_id=task.context_id, status=task.status, history=task.history,
-                      metadata=task.metadata, artifacts=[a for a in task.artifacts if a.name != "transcript"])
+                      metadata=task.metadata,
+                      artifacts=[a for a in task.artifacts if a.name not in ("transcript", "file")])
         try:
             await super().save(stored, context)
         except Exception:
@@ -309,6 +311,8 @@ class VesselExecutor(AgentExecutor):
         # The transcript goes only to callers that ask for it (apps keeping history do); an orchestrator that
         # just wants the answer, such as AstralDeep calling an external agent, gets the answer alone.
         wants_transcript = bool(config and transcript.MEDIA_TYPE in config.accepted_output_modes)
+        accepted = set(config.accepted_output_modes) if config and config.accepted_output_modes else None
+        files = [0]
         try:
             history = self._history(context.message)
             images = image_urls(context.message)
@@ -341,6 +345,16 @@ class VesselExecutor(AgentExecutor):
         async def emit(item: dict[str, Any]) -> None:
             if item["type"] == ev.TURN_FINISHED:
                 await stream.flush()
+                return
+            if item["type"] == ev.FILE_ADDED:
+                # Files go to callers that accept their type (or state no preference), on the live stream only.
+                await stream.flush()
+                if accepted is None or item["media_type"] in accepted:
+                    files[0] += 1
+                    part = Part(raw=item["data"], media_type=item["media_type"], filename=item["name"])
+                    part.metadata.update({"call_id": item["call_id"]})
+                    await updater.add_artifact([part], artifact_id=f"{task_id}-file-{files[0]}", name="file",
+                                               last_chunk=True)
                 return
             await stream.add(item)
 
@@ -448,7 +462,8 @@ def agent_card(deployment: Deployment, agent: Agent) -> AgentCard:
         default_input_modes=["text/plain", transcript.MEDIA_TYPE] + (
             list(IMAGE_MAGIC) if agent.package.manifest.model.images else []),
         default_output_modes=["text/markdown", transcript.MEDIA_TYPE] + (
-            [ev.PRIMITIVES_MEDIA_TYPE] if agent.package.manifest.output.primitives else []),
+            [ev.PRIMITIVES_MEDIA_TYPE] if agent.package.manifest.output.primitives else []) + [
+            outputs.FILE_TYPES[kind][0] for kind in agent.package.manifest.output.files],
         supported_interfaces=[AgentInterface(protocol_binding="JSONRPC", url=agent_url(deployment, agent.id),
                                              protocol_version=PROTOCOL_VERSION_1_0)],
         provider=AgentProvider(organization="AstralVessel", url="https://github.com/AstralDeep/AstralVessel"),
@@ -559,7 +574,8 @@ def create_app(settings: Settings | None = None, runners: dict[str, ToolRunner] 
             sandbox = agent.package.manifest.sandbox
             longest = max([sandbox.tool_timeout_seconds] + [t.timeout_seconds or 0 for t in agent.package.declared])
             runner = RemoteRunner(settings.sandbox_url_template.format(id=agent_id),
-                                  sandbox_token(settings.sandbox_master or "", agent_id), longest)
+                                  sandbox_token(settings.sandbox_master or "", agent_id), longest,
+                                  agent.package.manifest.output.files)
         elif settings.allow_in_process:
             log.warning("agent %s: tools run unconfined in the vessel process (development only)", agent_id)
             runner = LocalRunner(agent.package)
