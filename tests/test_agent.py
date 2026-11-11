@@ -77,22 +77,23 @@ def test_history_with_broken_arguments_is_replayable():
     def call(arguments):
         return {"role": "assistant", "content": None, "tool_calls": [
             {"id": "c", "type": "function", "function": {"name": "read", "arguments": arguments}}]}
-    history = [call('{"names": Ada, Grace}'), call("[1, 2]"), call('{"x": NaN}'), call('{"path": "a.md"}'), call("")]
+    broken = ['{"names": Ada, Grace}', "[1, 2]", '{"x": NaN}', " ", "[" * 100000]
+    history = [call(a) for a in broken] + [call('{"path": "a.md"}')]
     sent = for_model(history, send_reasoning=False)
-    assert [m["tool_calls"][0]["function"]["arguments"] for m in sent] == ["{}", "{}", "{}", '{"path": "a.md"}', ""]
+    assert [m["tool_calls"][0]["function"]["arguments"] for m in sent] == ["{}"] * 5 + ['{"path": "a.md"}']
     assert history[0]["tool_calls"][0]["function"]["arguments"] == '{"names": Ada, Grace}'
 
 
 async def test_a_refused_model_request_is_logged_for_the_operator(caplog):
     def handler(request):
-        return httpx.Response(400, text='{"error": "messages[3].tool_calls[0].function.arguments is not JSON"}')
+        return httpx.Response(400, text='{"error": "arguments is not JSON"}\nFORGED log line')
 
     client = ModelClient("http://model.test/v1", "k", "test-model", transport=httpx.MockTransport(handler), retries=0)
     with caplog.at_level(logging.WARNING, logger="astralvessel"), pytest.raises(ModelError) as raised:
         async for _ in client.stream([{"role": "user", "content": "hi"}], []):
             pass
     assert str(raised.value) == "model endpoint returned HTTP 400"
-    assert "arguments is not JSON" in caplog.text
+    assert "arguments is not JSON" in caplog.text and "\\nFORGED" in caplog.text and "\nFORGED" not in caplog.text
 
 
 async def test_step_limit_forces_a_final_answer(package_dir, model):

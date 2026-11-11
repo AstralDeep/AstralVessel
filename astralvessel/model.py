@@ -87,9 +87,9 @@ class ModelClient:
                             await response.aread()
                             await asyncio.sleep(min(2 ** attempt, 8))
                             continue
-                        body = (await response.aread())[:500].decode("utf-8", "replace")
-                        # Logged for the operator only; the caller sees the status alone.
-                        log.warning("model endpoint returned HTTP %s: %s", response.status_code, body)
+                        detail = (await response.aread())[:500].decode("utf-8", "replace")
+                        # For the operator only, escaped onto one line; the caller sees the status alone.
+                        log.warning("model endpoint returned HTTP %s: %r", response.status_code, detail)
                         raise ModelError(f"model endpoint returned HTTP {response.status_code}")
                     result = StepResult()
                     calls: dict[int, dict[str, str]] = {}

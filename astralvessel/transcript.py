@@ -138,7 +138,7 @@ def _check_assistant(message: dict[str, Any], where: str, pending: set[str]) -> 
 def parse_arguments(raw: str) -> dict[str, Any] | None:
     try:
         value = json.loads(raw or "{}", parse_constant=_reject_constant, parse_float=_finite)
-    except ValueError:
+    except (ValueError, RecursionError):
         return None
     return value if isinstance(value, dict) else None
 
@@ -146,7 +146,7 @@ def parse_arguments(raw: str) -> dict[str, Any] | None:
 def replayable(raw: str) -> str:
     # Model endpoints refuse a request whose earlier tool call holds arguments that are not a JSON object, which would
     # end the turn over one bad call; the call's error result stays, so the model can still see and retry it.
-    return raw if parse_arguments(raw) is not None else "{}"
+    return raw if raw.strip() and parse_arguments(raw) is not None else "{}"
 
 
 def for_model(messages: list[dict[str, Any]], send_reasoning: bool) -> list[dict[str, Any]]:
