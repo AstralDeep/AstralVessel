@@ -16,6 +16,7 @@ FRONT=$(dc exec -T vessel printenv VESSEL_HOST)  # this deployment's front addre
 check "sandbox has no route to the internet"            not_reach $SB 1.1.1.1 443
 check "sandbox cannot resolve or reach egress"          not_reach $SB egress 8080
 MODEL_HOST=$(dc exec -T egress python -c 'import os,urllib.parse; print(urllib.parse.urlsplit(os.environ["LLM_BASE_URL"]).hostname)')
+check "the model host is known to the probes"         test -n "$MODEL_HOST"
 check "sandbox cannot reach the model host directly"    not_reach $SB "$MODEL_HOST" 443
 check "sandbox cannot reach the harness API"            not_reach $SB vessel 8700
 check "sandbox cannot reach the harness's front address" not_reach $SB $FRONT 8700

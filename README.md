@@ -165,6 +165,9 @@ path = "/agent-tools/lookup"
 
 ```toml
 # deployment.toml: the operator grants the service and its credentials
+[egress]
+upstream_url = "env:VESSEL_UPSTREAM_MODEL_URL"   # required: any OpenAI-compatible endpoint
+
 [[agents]]
 id = "records-agent"
 package = "agents/records"
@@ -222,7 +225,7 @@ cp deploy/.env.example deploy/.env      # fill in the model endpoint and key, ap
 cd deploy
 astralvessel deploy deployment.toml      # (installed as in Develop) writes compose.generated.yml and sandbox tokens
 docker compose -f compose.generated.yml --env-file .env up -d --build
-./verify-isolation.sh                    # 41 isolation probes from inside the containers
+./verify-isolation.sh                    # 42 isolation probes from inside the containers
 set -a; . ./.env; set +a
 for agent in field-guide field-guide-reader; do
   docker run --rm --network astralvessel_front -v "$PWD/../conformance:/conformance:ro" astralvessel:local \

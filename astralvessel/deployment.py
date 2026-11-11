@@ -8,9 +8,11 @@ import hmac
 import ipaddress
 import json
 import os
+import re
 import tomllib
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -46,8 +48,14 @@ class EgressSection(Strict):
 
     @model_validator(mode="after")
     def endpoint(self) -> EgressSection:
-        if not self.upstream_url.startswith(("env:", "http://", "https://")):
-            raise ValueError("egress upstream_url must be an http(s) URL or env:NAME")
+        url = self.upstream_url
+        if url.startswith("env:"):
+            ok = re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", url[4:]) is not None
+        else:
+            parts = urlsplit(url)
+            ok = parts.scheme.lower() in ("http", "https") and bool(parts.hostname) and not re.search(r"\s", url)
+        if not ok:
+            raise ValueError("egress upstream_url must be an http(s) URL with a host, or env:NAME")
         return self
 
 

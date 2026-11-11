@@ -314,9 +314,12 @@ def test_the_model_endpoint_is_required_and_may_come_from_the_environment(packag
     path.write_text(deployment_text(package_dir, mounts="").replace('upstream_url = "https://models.test/v1"\n', ""))
     with pytest.raises(ValueError, match="upstream_url"):
         load_deployment(path)
-    path.write_text(deployment_text(package_dir, mounts="").replace('"https://models.test/v1"', '"ftp://x"'))
-    with pytest.raises(ValueError, match="http"):
-        load_deployment(path)
+    for bad in ('"ftp://x"', '"env:"', '"http://"', '"https://x y"'):
+        path.write_text(deployment_text(package_dir, mounts="").replace('"https://models.test/v1"', bad))
+        with pytest.raises(ValueError, match="http"):
+            load_deployment(path)
+    path.write_text(deployment_text(package_dir, mounts="").replace('"https://models.test/v1"', '"HTTPS://m.test/v1"'))
+    load_deployment(path)
     path.write_text(deployment_text(package_dir, mounts="").replace('"https://models.test/v1"', '"env:MODEL_URL"'))
     egress = generate(load_deployment(path), repo_root=None)["services"]["egress"]["environment"]
     assert egress["LLM_BASE_URL"].startswith("${MODEL_URL:?")
