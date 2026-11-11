@@ -1,7 +1,6 @@
 # Lint, the test suite on each supported Python, and isolation probes against the example deployment built from
-# this commit, on every pull request and every push to main. It needs no
-# secrets: the tests use a scripted model and the deployment placeholder keys. Conformance needs a real model, so it
-# stays a maintainer step (README, Contributing).
+# this commit, on every pull request and every push to main. It needs no secrets: the tests use a scripted model and
+# the deployment throwaway keys. Conformance needs a real model, so it stays a maintainer step (README, Contributing).
 name: CI
 
 on:
@@ -65,10 +64,15 @@ jobs:
       - name: Start the example deployment with placeholder keys
         working-directory: deploy
         run: |
-          printf '%s\n' VESSEL_UPSTREAM_MODEL_KEY=ci VESSEL_APP_KEY=ci VESSEL_APP_KEY_SHA256=ci \
-            "VESSEL_SANDBOX_TOKEN=$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" > .env
+          python - > .env <<'PY'
+          import hashlib, secrets
+          app = secrets.token_urlsafe(32)
+          print(f"VESSEL_UPSTREAM_MODEL_KEY=ci\nVESSEL_APP_KEY={app}")
+          print(f"VESSEL_APP_KEY_SHA256={hashlib.sha256(app.encode()).hexdigest()}")
+          print(f"VESSEL_SANDBOX_TOKEN={secrets.token_urlsafe(32)}")
+          PY
           astralvessel deploy deployment.toml
-          docker compose -f compose.generated.yml --env-file .env up -d --build --wait --wait-timeout 300 || true
+          docker compose -f compose.generated.yml --env-file .env up -d --build
           for i in $(seq 60); do
             [ "$(docker compose -f compose.generated.yml --env-file .env logs vessel | grep -c 'sandbox is ready')" -ge 2 ] && exit 0
             sleep 5
