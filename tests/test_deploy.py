@@ -6,6 +6,7 @@ import asyncio
 import os
 import shutil
 import stat
+from importlib.metadata import version
 
 import pytest
 
@@ -117,6 +118,12 @@ def test_compose_isolates_each_sandbox_and_keeps_secrets_out(data_package, tmp_p
     assert search["networks"] == ["egress"] and "ports" not in search and search["read_only"]
     assert search["cap_drop"] == ["ALL"] and vessel["environment"]["VESSEL_SEARCH_URL"] == "http://search:8080"
     assert "search" in vessel["depends_on"]
+    released = version("astralvessel")
+    assert vessel["image"] == f"ghcr.io/astraldeep/astralvessel:{released}" and "build" not in vessel
+    assert spec["services"]["egress"]["image"] == f"ghcr.io/astraldeep/astralvessel-egress:{released}"
+    built = generate(deployment, repo_root=tmp_path)["services"]
+    assert built["vessel"]["image"] == "astralvessel:local" and built["vessel"]["build"]["context"] == str(tmp_path)
+    assert built["egress"]["build"]["context"] == str(tmp_path / "egress")
     assert "VESSEL_MODEL_KEY" not in vessel["environment"] and vessel["env_file"] == [".generated/vessel.env"]
     assert spec["services"]["egress"]["env_file"] == [".generated/egress.env"]
     assert search["env_file"] == [".generated/search.env"]
@@ -267,3 +274,34 @@ def test_in_server_tools_check_where_the_opened_path_really_points(tmp_path, too
             "glob": lambda: _glob({"pattern": "*", "path": "link"}, str(data), 5, confinement)}[tool]
     with pytest.raises(PermissionError):
         asyncio.run(call())
+
+
+def test_two_deployments_on_one_host_can_differ_in_project_and_subnet(package_dir, tmp_path):
+    path = tmp_path / "deployment.toml"
+    path.write_text(deployment_text(package_dir, mounts=""))
+    assert generate(load_deployment(path), repo_root=None)["name"] == "astralvessel"
+    second = '[vessel]\nproject = "infocus"\nfront_subnet = "172.31.248.0/24"\nfront_address = "172.31.248.10"\n'
+    path.write_text(second + deployment_text(package_dir, mounts=""))
+    spec = generate(load_deployment(path), repo_root=None)
+    assert spec["name"] == "infocus" and spec["networks"]["front"]["ipam"]["config"][0]["subnet"] == "172.31.248.0/24"
+    for bad in ('[vessel]\nproject = "Bad Name"\n', '[vessel]\nfront_address = "10.0.0.5"\n'):
+        path.write_text(bad + deployment_text(package_dir, mounts=""))
+        with pytest.raises(ValueError):
+            load_deployment(path)
+
+
+def test_a_second_project_keeps_its_own_images_and_folder(package_dir, tmp_path):
+    from astralvessel.compose import write
+    path = tmp_path / "deployment.toml"
+    second = '[vessel]\nproject = "infocus"\nfront_subnet = "172.31.248.0/24"\nfront_address = "172.31.248.10"\n'
+    path.write_text(second + deployment_text(package_dir, mounts=""))
+    repo = tmp_path / "repo"
+    (repo / "egress").mkdir(parents=True)
+    services = generate(load_deployment(path), repo_root=repo)["services"]
+    assert {services[s]["image"] for s in ("vessel", "egress", "sandbox-guide")} == {
+        "infocus:local", "infocus-egress:local"}
+    out = tmp_path / "compose.generated.yml"
+    write(load_deployment(path), out, repo_root=None, master_token="m" * 16)
+    path.write_text(deployment_text(package_dir, mounts=""))
+    with pytest.raises(SystemExit, match="infocus"):
+        write(load_deployment(path), out, repo_root=None, master_token="m" * 16)

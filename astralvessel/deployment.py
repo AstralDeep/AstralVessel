@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import re
@@ -24,10 +25,19 @@ class Strict(BaseModel):
 
 
 class VesselSection(Strict):
+    # Two deployments on one host need different project names and front subnets.
+    project: str = Field(default="astralvessel", pattern=r"^[a-z0-9][a-z0-9_-]{0,62}$")
     public_url: str = "http://vessel:8700"
     front_subnet: str = "172.31.247.0/24"
     front_address: str = "172.31.247.10"
     task_ttl_hours: float = Field(default=24, gt=0)
+
+    @model_validator(mode="after")
+    def address_in_subnet(self) -> VesselSection:
+        subnet = ipaddress.ip_network(self.front_subnet, strict=True)
+        if ipaddress.ip_address(self.front_address) not in subnet:
+            raise ValueError(f"front_address {self.front_address} is not in front_subnet {self.front_subnet}")
+        return self
 
 
 class EgressSection(Strict):
