@@ -5,12 +5,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+
+log = logging.getLogger("astralvessel")
 
 RETRYABLE = {429, 500, 502, 503, 504}
 
@@ -84,6 +87,9 @@ class ModelClient:
                             await response.aread()
                             await asyncio.sleep(min(2 ** attempt, 8))
                             continue
+                        body = (await response.aread())[:500].decode("utf-8", "replace")
+                        # Logged for the operator only; the caller sees the status alone.
+                        log.warning("model endpoint returned HTTP %s: %s", response.status_code, body)
                         raise ModelError(f"model endpoint returned HTTP {response.status_code}")
                     result = StepResult()
                     calls: dict[int, dict[str, str]] = {}

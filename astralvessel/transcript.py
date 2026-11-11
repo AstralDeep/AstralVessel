@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import base64
+import json
+import math
 import re
 from typing import Any
 
@@ -133,7 +135,38 @@ def _check_assistant(message: dict[str, Any], where: str, pending: set[str]) -> 
         pending.add(call["id"])
 
 
+def parse_arguments(raw: str) -> dict[str, Any] | None:
+    try:
+        value = json.loads(raw or "{}", parse_constant=_reject_constant, parse_float=_finite)
+    except ValueError:
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def replayable(raw: str) -> str:
+    # Model endpoints refuse a request whose earlier tool call holds arguments that are not a JSON object, which would
+    # end the turn over one bad call; the call's error result stays, so the model can still see and retry it.
+    return raw if parse_arguments(raw) is not None else "{}"
+
+
 def for_model(messages: list[dict[str, Any]], send_reasoning: bool) -> list[dict[str, Any]]:
-    if send_reasoning:
-        return messages
-    return [{k: v for k, v in m.items() if k != "reasoning_content"} for m in messages]
+    out = []
+    for m in messages:
+        if not send_reasoning:
+            m = {k: v for k, v in m.items() if k != "reasoning_content"}
+        if m.get("tool_calls"):
+            m = {**m, "tool_calls": [{**c, "function": {**c["function"], "arguments": replayable(
+                c["function"]["arguments"])}} for c in m["tool_calls"]]}
+        out.append(m)
+    return out
+
+
+def _reject_constant(name: str) -> None:
+    raise ValueError(f"non-finite number {name}")
+
+
+def _finite(text: str) -> float:
+    value = float(text)
+    if math.isinf(value):
+        raise ValueError("non-finite number")
+    return value
