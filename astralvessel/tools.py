@@ -182,8 +182,23 @@ async def _supervise(argv: list[str], *, cwd: str, env: dict[str, str], timeout:
             raise
         return 124, f"[timed out after {timeout} s]"
     finally:
+        kill_session(proc.pid)
         ACTIVE_SESSIONS.discard(proc.pid)
     return proc.returncode or 0, out.decode("utf-8", "replace")
+
+
+def kill_session(sid: int) -> None:
+    # Confined calls cannot leave their session (seccomp blocks setsid and setpgid), so this ends everything a
+    # call started, background processes included, before anything walks or removes its files.
+    for _ in range(10):
+        alive = False
+        for entry in filter(str.isdigit, os.listdir("/proc")):
+            with contextlib.suppress(OSError):
+                if int(entry) != sid and os.getsid(int(entry)) == sid:
+                    os.kill(int(entry), 9)
+                    alive = True
+        if not alive:
+            return
 
 
 async def _collect(proc: asyncio.subprocess.Process, stdin: bytes | None) -> bytes:
@@ -452,6 +467,8 @@ def disk_usage(path: str, limit: int = 0) -> int:
                 info = entry.stat(follow_symlinks=False)
             except FileNotFoundError:
                 continue
+            except OSError:
+                return max(total, limit) + 1  # a name too long to reach, or a folder shut mid-walk
             total += info.st_blocks * 512 + ENTRY_BYTES
             if stat.S_ISDIR(info.st_mode):
                 if depth + 1 > MAX_DEPTH:
@@ -486,7 +503,8 @@ def remove_tree(root: str) -> None:
 
 
 def open_deleted_usage(prefix: str) -> dict[str, int]:
-    # Files a call deleted but still holds open keep their space; charge them to the workspace they were in.
+    # Files a call deleted but still holds open or mapped keep their space; charge them to the workspace they were
+    # in. Calls cannot leave their sessions and hold at most MAX_OPEN_FILES each, so this scan stays bounded.
     found: dict[tuple[int, int], tuple[str, int]] = {}
     for pid in filter(str.isdigit, os.listdir("/proc")):
         with contextlib.suppress(OSError):
@@ -499,6 +517,16 @@ def open_deleted_usage(prefix: str) -> dict[str, int]:
                         info = os.stat(f"/proc/{pid}/fd/{fd}")
                         workspace = target[len(prefix):].split("/", 1)[0]
                         found[(info.st_dev, info.st_ino)] = (workspace, info.st_blocks * 512)
+            with open(f"/proc/{pid}/maps") as maps:
+                for line in maps:
+                    fields = line.split(maxsplit=5)
+                    if len(fields) == 6 and fields[5].startswith(prefix) and fields[5].rstrip().endswith(
+                            " (deleted)"):
+                        start, end = (int(x, 16) for x in fields[0].split("-"))
+                        workspace = fields[5][len(prefix):].split("/", 1)[0]
+                        key = (int(fields[3].replace(":", ""), 16), int(fields[4]))
+                        size = max(found.get(key, ("", 0))[1], end - start)
+                        found[key] = (workspace, size)
     usage: dict[str, int] = {}
     for workspace, size in found.values():
         usage[workspace] = usage.get(workspace, 0) + size

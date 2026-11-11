@@ -6,6 +6,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import hmac
+import logging
 import os
 import signal
 import time
@@ -35,6 +36,7 @@ from .tools import (
 )
 
 SCRATCH_ROOT = "/tmp/vessel-calls"
+log = logging.getLogger("astralvessel")
 
 
 class ToolRunner(Protocol):
@@ -181,17 +183,28 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
     owners: dict[str, str] = {}  # live turn -> its user's digest
 
     measured: dict[str, tuple[float, int]] = {}  # workspace -> (when, bytes), shared by concurrent calls
+    deleted_at: list[float] = [0.0]
+    deleted: list[dict[str, int]] = [{}]
+
+    def check_limits(workspace: str | None, fresh: bool = False) -> str:
+        # A measurement that fails counts as over the limit, so an odd tree can never switch the limits off.
+        try:
+            return over_limit(workspace, fresh)
+        except Exception:  # noqa: BLE001
+            log.warning("measuring disk use failed", exc_info=True)
+            return "this turn's"
 
     def over_limit(workspace: str | None, fresh: bool = False) -> str:
         # Which disk limit a turn has gone over, if any; a user's limit covers all their live turns together.
         if confinement is None or not workspace:
             return ""
         now = time.monotonic()
-        deleted = open_deleted_usage(os.path.join(confinement.scratch_root, "turn-"))
+        if now - deleted_at[0] > 0.4 or fresh:
+            deleted_at[0], deleted[0] = now, open_deleted_usage(os.path.join(confinement.scratch_root, "turn-"))
         def used(key: str) -> int:
             when, size = measured.get(key, (0.0, 0))
             if now - when > 0.4 or (fresh and key == workspace):
-                size = disk_usage(confinement.for_turn(key).workspace, user_disk or turn_disk) + deleted.get(key, 0)
+                size = disk_usage(confinement.for_turn(key).workspace, user_disk or turn_disk) + deleted[0].get(key, 0)
                 measured[key] = (now, size)
             return size
         if turn_disk and used(workspace) > turn_disk:
@@ -269,7 +282,7 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
                 if not done and await request.is_disconnected():
                     task.cancel()
                     return JSONResponse({"error": True, "output": "cancelled"}, status_code=499)
-                if not done and (limit := await asyncio.to_thread(over_limit, workspace)):
+                if not done and (limit := await asyncio.to_thread(check_limits, workspace)):
                     task.cancel()
                     await asyncio.gather(task, return_exceptions=True)
                     return await stop_over_limit(workspace, limit)
@@ -278,9 +291,11 @@ def sandbox_app(package_path: str | None = None, token: str | None = None, *, co
                     return stop_note(stopped[workspace])
                 return JSONResponse({"error": True, "output": "this turn has ended"}, status_code=410)
             output, error = task.result()
-            if limit := await asyncio.to_thread(over_limit, workspace, True):
+            if limit := await asyncio.to_thread(check_limits, workspace, True):
                 return await stop_over_limit(workspace, limit)
         finally:
+            if not task.done():
+                task.cancel()  # whatever went wrong here, the call does not run on unwatched
             reap_strays()
         files = [f.wire() for f in runner.take_files(workspace)] if workspace else []
         return JSONResponse({"output": output, "error": error, "files": files})

@@ -77,7 +77,8 @@ agent declares what it needs; the deployment file is the only place access is gr
   outgrow the turn's limit, each file or folder also counts 1 KB, files deleted but still open count
   until closed, and a turn that goes over either limit has its calls stopped and its workspace emptied.
   The sandbox checks usage twice a second, so a fast writer can briefly overshoot; `scratch` stays the
-  hard ceiling. A call cannot read another turn's files, see other
+  hard ceiling. A call cannot start a new session or process group (`setsid`, `setpgid`), so everything
+  it starts ends with it, and it may hold at most 4096 open files. A call cannot read another turn's files, see other
   processes, signal them, make socket files, use shared memory or message queues, or open network
   sockets. Users can share an agent without seeing each other. An agent that needs extra software ships a Dockerfile built on the AstralVessel image.
 - **Service tools** call the application itself: the vessel sends the model's arguments to an endpoint

@@ -152,3 +152,34 @@ async def test_a_deleted_file_held_open_still_counts(package_dir, tmp_path, monk
         out = (await client.post("/run", json={"name": "bash", "args": {"command": hold}, "workspace": "c" * 32,
                                                "owner": ALICE}, headers=AUTH)).json()
         assert out["error"] and "disk limit" in out["output"]
+
+
+def test_a_name_too_long_to_reach_counts_as_over_instead_of_failing(tmp_path):
+    from astralvessel.tools import disk_usage
+    fd = os.open(tmp_path, os.O_RDONLY)
+    for _ in range(17):  # under the depth limit, but the full path is longer than PATH_MAX
+        os.mkdir("n" * 250, dir_fd=fd)
+        child = os.open("n" * 250, os.O_RDONLY, dir_fd=fd)
+        os.close(fd)
+        fd = child
+    os.close(fd)
+    assert disk_usage(str(tmp_path), limit=10 ** 9) > 10 ** 9
+
+
+@landlock
+async def test_a_call_cannot_leave_its_session_and_nothing_it_starts_outlives_it(package_dir, tmp_path):
+    package = load_package(package_dir)
+    scratch = tmp_path / "calls"
+    scratch.mkdir()
+    runner = sandbox.LocalRunner(package, sandbox.confinement_for(package, str(scratch)))
+    out, _ = await runner.run("bash", {"command": "python3 -c 'import os; os.setsid()' 2>&1 | tail -1; "
+                                                  "ulimit -n; (sleep 377 >/dev/null 2>&1 &); echo started"}, "c" * 32)
+    assert "PermissionError" in out and "4096" in out and "started" in out
+    def sleeping(pid: str) -> bool:
+        try:
+            with open(f"/proc/{pid}/cmdline", "rb") as handle:
+                return handle.read() == b"sleep\x00377\x00"
+        except OSError:
+            return False
+    assert not any(sleeping(p) for p in os.listdir("/proc") if p.isdigit())
+    await runner.end_turn("c" * 32)
