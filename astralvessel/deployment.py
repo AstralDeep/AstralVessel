@@ -253,6 +253,9 @@ def load_deployment(path: str | Path, packages_root: str | None = None) -> Deplo
     issuers = [i.model_copy(update={"jwks_file": f"{jwks_dir}/{i.id}.json" if jwks_dir
                                     else str((path.parent / i.jwks_file).resolve())}) if i.jwks_file else i
                for i in raw.issuers]
+    for issuer in issuers:
+        if issuer.jwks_file and not Path(issuer.jwks_file).is_file():
+            raise ValueError(f"issuer {issuer.id}: jwks_file {issuer.jwks_file} is not a file")
     return Deployment(path=path, vessel=raw.vessel, egress=raw.egress, search=raw.search, agents=agents,
                       apps=raw.apps, issuers=issuers)
 

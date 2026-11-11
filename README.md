@@ -98,8 +98,8 @@ agent declares what it needs; the deployment file is the only place access is gr
 
 Nothing in the running system controls Docker. `astralvessel deploy` turns `deployment.toml` into a
 Compose file, the operator starts it, and the vessel serves an agent only once its sandbox reports that
-it is confined and was started from the current version of that agent's part of the deployment, its
-manifest and tools (a profile fingerprint set at deploy time, so an edit that was not redeployed is caught). Deploy labels the vessel
+it is confined and was started from the current version of its sandbox profile, its manifest and its
+tools (a profile fingerprint set at deploy time, so an edit that was not redeployed is caught). Deploy labels the vessel
 with the deployment file and those fingerprints, so `up -d` recreates it whenever they change. Prompt
 files are read on every turn and need no redeploy.
 Applications join the vessel's `front` network to reach it, and to receive its service calls.

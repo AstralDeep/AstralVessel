@@ -184,8 +184,11 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
 
 
 def inputs_hash(deployment: Deployment) -> str:
+    # Issuer key files count too: a single-file mount keeps the old file after a rename, so a new key needs a recreate.
     body = {"deployment": hashlib.sha256(deployment.path.read_bytes()).hexdigest(),
-            "agents": {agent_id: agent.fingerprint for agent_id, agent in deployment.agents.items()}}
+            "agents": {agent_id: agent.fingerprint for agent_id, agent in deployment.agents.items()},
+            "keys": {i.id: hashlib.sha256(Path(i.jwks_file).read_bytes()).hexdigest()
+                     for i in deployment.issuers if i.jwks_file}}
     return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:16]
 
 
