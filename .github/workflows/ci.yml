@@ -1,6 +1,6 @@
 # Lint, the test suite on each supported Python, and isolation probes against the example deployment built from
 # this commit, on every pull request and every push to main. It needs no secrets: the tests use a scripted model and
-# the deployment throwaway keys. Conformance needs a real model, so it stays a maintainer step (README, Contributing).
+# the deployment throwaway keys.
 name: CI
 
 on:
@@ -86,7 +86,7 @@ jobs:
           exit 1
       - name: Isolation probes
         working-directory: deploy
-        run: ./verify-isolation.sh
+        run: astralvessel check
       - name: Logs on failure
         if: failure()
         working-directory: deploy

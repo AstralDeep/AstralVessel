@@ -133,6 +133,8 @@ class AgentEntry(Strict):
     services: dict[str, ServiceGrant] = {}
     # Extra briefing files from the package, appended after prompt.md: one package can serve as several agents.
     prompt_append: list[str] = []
+    # Overrides the model the package names, so one deployment can set it in one place.
+    model: str | None = Field(default=None, min_length=1)
 
 
 class AppEntry(Strict):
@@ -209,6 +211,11 @@ class Agent(BaseModel):
     profile: SandboxProfile
     services: dict[str, ServiceGrant] = {}
     prompt_append: tuple[str, ...] = ()
+    model_override: str | None = None
+
+    @property
+    def model(self) -> str:
+        return self.model_override or self.package.manifest.model.model
 
     @property
     def fingerprint(self) -> str:
@@ -247,7 +254,8 @@ def load_deployment(path: str | Path, packages_root: str | None = None) -> Deplo
             if not target.is_file() or package.root not in target.parents:
                 raise ValueError(f"agent {entry.id}: prompt_append {name} must be a file inside the package")
         agents[entry.id] = Agent(id=entry.id, package=package, host_package=host, profile=entry.sandbox,
-                                 services=entry.services, prompt_append=tuple(entry.prompt_append))
+                                 services=entry.services, prompt_append=tuple(entry.prompt_append),
+                                 model_override=entry.model)
     # Inside the vessel container each key file is mounted at <VESSEL_JWKS_DIR>/<issuer id>.json.
     jwks_dir = os.environ.get("VESSEL_JWKS_DIR")
     issuers = [i.model_copy(update={"jwks_file": f"{jwks_dir}/{i.id}.json" if jwks_dir

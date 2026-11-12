@@ -10,6 +10,8 @@ RUN apt-get update \
 WORKDIR /opt/astralvessel
 COPY pyproject.toml README.md ./
 COPY astralvessel ./astralvessel
+COPY examples/field-guide ./examples/field-guide
+COPY examples/sample-data ./examples/sample-data
 ARG ASTRALPRIMS_VERSION=0.12.0
 RUN pip install --no-cache-dir . "astralprims==${ASTRALPRIMS_VERSION}"
 
