@@ -1,6 +1,6 @@
 # One image for the harness and the sandbox: the same code, run as `astralvessel serve` or `astralvessel sandbox`.
 # Agent packages are mounted at runtime; compose applies the sandbox hardening.
-FROM python:3.11-slim
+FROM python:3.15-slim
 LABEL org.opencontainers.image.source="https://github.com/AstralDeep/AstralVessel"
 
 RUN apt-get update \
