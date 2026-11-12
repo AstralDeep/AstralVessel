@@ -54,4 +54,5 @@ Releases come from a version tag on `main`:
    with the version and `latest`, waits for a maintainer to approve the `pypi` environment, checks the images can
    be pulled without signing in, and publishes the package to PyPI through trusted publishing.
 
-The first release is 0.5.0.
+The first release was 0.5.0. Read the [changelog](../changelog.md) before upgrading: in 0.x, a minor version
+can remove or change settings.

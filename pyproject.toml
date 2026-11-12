@@ -1,6 +1,6 @@
 [project]
 name = "astralvessel"
-version = "0.5.0"
+version = "0.6.0"
 description = "A lightweight, open agent harness and standard that speaks the Astral protocols."
 readme = "README.md"
 license = "Apache-2.0"

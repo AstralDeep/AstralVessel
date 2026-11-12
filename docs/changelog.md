@@ -3,7 +3,7 @@
 Changes by version, summarized from the repository's history. 0.5.0 is the first published release; the earlier
 version numbers follow the milestones in that history and were never published.
 
-## Unreleased
+## 0.6.0 (2026-11-12)
 
 - **Four-command setup.** `astralvessel up` writes `deployment.toml` and a private `.env` when there is none (asking
   for agent folders, model URL, key and model, or taking them as options; `env:NAME` keeps the key out of every
@@ -18,9 +18,8 @@ version numbers follow the milestones in that history and were never published.
 - **The vessel's address is reserved.** Containers that join `front` (applications, `chat`, `ask`) now get
   addresses only from the upper half of `front_subnet`, so none can take the vessel's address while it is stopped.
   `front_address` must be in the lower half (the default `.10` is), and `front_subnet` must be a /28 or larger. The
-  next `up` recreates an existing deployment's `front` network: stop applications attached to it first, and start
+  next `up` (or `deploy` plus `docker compose up`) recreates an existing deployment's `front` network: stop applications attached to it first, and start
   them again afterward.
-- `ask` and `chat` no longer need the model key's variable when the key is given as `env:NAME`.
 - **macOS with Docker Desktop on Apple silicon is supported**, after the isolation probes passed there.
 - The documentation site now updates when a release is published, not on every change to `main`.
 - `tool_error` is no longer a turn status; it was reserved and never produced. A failed tool call never ends a
