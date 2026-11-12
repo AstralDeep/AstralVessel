@@ -16,7 +16,7 @@ front_address = "172.31.248.10"
 | Setting | Why it must differ |
 |---|---|
 | `project` | Prefixes containers, networks, volumes and locally built images (`second:local` and `second-egress:local` from a checkout, and `second-sandbox-<agent>:local` for an agent with a sandbox Dockerfile). Lowercase letters, digits, `_` and `-`, starting with a letter or digit. |
-| `front_subnet`, `front_address` | Two networks cannot use the same subnet. `front_address` must be inside `front_subnet`. |
+| `front_subnet`, `front_address` | Two networks cannot use the same subnet. `front_address` must be in the lower half of `front_subnet`. |
 
 ## Keep each deployment in its own folder
 

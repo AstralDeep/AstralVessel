@@ -15,6 +15,12 @@ version numbers follow the milestones in that history and were never published.
   a short-lived container on the internal `front` network; `astralvessel down` stops a deployment.
 - An optional `model` per agent in `deployment.toml`, overriding the agent folder's.
 - **The conformance suite is removed.** Its checks that the tests did not already make are now in the test suite.
+- **The vessel's address is reserved.** Containers that join `front` (applications, `chat`, `ask`) now get
+  addresses only from the upper half of `front_subnet`, so none can take the vessel's address while it is stopped.
+  `front_address` must be in the lower half (the default `.10` is), and `front_subnet` must be a /28 or larger. The
+  next `up` recreates an existing deployment's `front` network; applications attached to it reconnect.
+- `ask` and `chat` no longer need the model key's variable when the key is given as `env:NAME`.
+- The documentation site now updates when a release is published, not on every change to `main`.
 - `tool_error` is no longer a turn status; it was reserved and never produced. A failed tool call never ends a
   turn.
 - `turn.finished` is documented as always carrying `files`, `[]` when none, with a regression test.

@@ -1,12 +1,12 @@
 # Builds the documentation site with --strict on pull requests that touch it or the code its tables are read from,
-# and deploys it to GitHub Pages on every push to main.
+# and deploys it to GitHub Pages when a release is tagged, so the site always matches the published package.
 name: Docs
 
 on:
   pull_request:
     paths: ["docs/**", "mkdocs.yml", "astralvessel/**", ".github/workflows/docs.yml"]
   push:
-    branches: [main]
+    tags: ["v*"]
   workflow_dispatch:
 
 permissions:
@@ -14,7 +14,7 @@ permissions:
 
 concurrency:
   group: docs-${{ github.ref }}
-  # A Pages deployment on main finishes; a superseded pull request build does not.
+  # A Pages deployment for a release finishes; a superseded pull request build does not.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -30,14 +30,14 @@ jobs:
           python-version: "3.12"
       - run: pip install -r docs/requirements.txt
       - run: mkdocs build --strict
-      - if: github.event_name != 'pull_request'
+      - if: startsWith(github.ref, 'refs/tags/v')
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9  # v5.0.0
         with:
           path: site/
 
   deploy:
     needs: build
-    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

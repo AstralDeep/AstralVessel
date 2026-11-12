@@ -437,10 +437,9 @@ def client(args: argparse.Namespace, mode: str) -> None:
     if not os.environ.get("VESSEL_APP_KEY"):
         raise SystemExit(f"set VESSEL_APP_KEY in the environment or {stack.env_file}")
     deployment = load_deployment(stack.deployment)
-    _require_env(stack, deployment)
     if args.agent not in deployment.agents:
         raise SystemExit(f"no agent {args.agent}; this deployment has {', '.join(deployment.agents)}")
-    image = stack.container_image("vessel")
+    image = stack.container_image(deployment.vessel.project, "vessel")
     chats = stack.deployment.parent / "chats"
     chats.mkdir(mode=0o700, exist_ok=True)
     tty = sys.stdin.isatty() and sys.stdout.isatty()

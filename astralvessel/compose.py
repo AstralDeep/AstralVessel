@@ -109,7 +109,8 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
     }
     networks: dict[str, Any] = {
         "egress": {"internal": True},
-        "front": {"internal": True, "ipam": {"config": [{"subnet": deployment.vessel.front_subnet}]}},
+        "front": {"internal": True, "ipam": {"config": [{"subnet": deployment.vessel.front_subnet,
+                                                         "ip_range": str(deployment.vessel.front_dynamic_range)}]}},
         "outside": {},
     }
     if deployment.search.provider == "searxng":

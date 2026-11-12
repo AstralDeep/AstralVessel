@@ -38,7 +38,18 @@ class VesselSection(Strict):
         subnet = ipaddress.ip_network(self.front_subnet, strict=True)
         if ipaddress.ip_address(self.front_address) not in subnet:
             raise ValueError(f"front_address {self.front_address} is not in front_subnet {self.front_subnet}")
+        if subnet.prefixlen > 28:
+            raise ValueError(f"front_subnet {self.front_subnet} is too small; use a /28 or larger")
+        if ipaddress.ip_address(self.front_address) in self.front_dynamic_range:
+            raise ValueError(f"front_address {self.front_address} must be in the lower half of {self.front_subnet}; "
+                             f"Docker hands out the upper half ({self.front_dynamic_range}) to other containers")
         return self
+
+    @property
+    def front_dynamic_range(self) -> ipaddress.IPv4Network | ipaddress.IPv6Network:
+        # Containers that join front (applications, chat) get addresses only from the upper half, so none can
+        # take the vessel's fixed address while the vessel is stopped.
+        return list(ipaddress.ip_network(self.front_subnet, strict=True).subnets(new_prefix=None))[-1]
 
 
 class EgressSection(Strict):

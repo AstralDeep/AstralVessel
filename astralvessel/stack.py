@@ -57,10 +57,14 @@ class Stack:
         done = self.compose("logs", "--no-color", "--tail", str(tail), service, check=False, capture=True)
         return (done.stdout or "") + (done.stderr or "")
 
-    def container_image(self, service: str) -> str:
-        done = self.compose("ps", "-q", service, check=False, capture=True)
+    def container_image(self, project: str, service: str) -> str:
+        # Found by Compose's labels, not `docker compose ps`, which needs every env: variable even though the
+        # client uses none of them (the model key may live only in the operator's shell).
+        done = subprocess.run(["docker", "ps", "-q", "--filter", f"label=com.docker.compose.project={project}",
+                               "--filter", f"label=com.docker.compose.service={service}"],
+                              check=False, text=True, capture_output=True)
         if done.returncode != 0:
-            raise SystemExit((done.stderr or "docker compose ps failed").strip())
+            raise SystemExit((done.stderr or "docker ps failed").strip())
         found = done.stdout.strip()
         if not found:
             raise SystemExit(f"the {service} container is not running; start the deployment with astralvessel up")

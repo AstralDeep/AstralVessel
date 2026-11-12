@@ -223,3 +223,30 @@ def test_provider_errors_are_scrubbed_of_key_like_text():
     body = '{"error": "Incorrect API key sk-abc123***xyz9 provided", "id": "a1b2c3d4e5f6g7h8i9j0k1l2m3"}'
     text = operate._scrub(body)
     assert "sk-abc" not in text and "a1b2c3d4e5f6" not in text and "Incorrect API key" in text
+
+
+def test_ask_needs_the_app_key_but_not_the_model_key(package_dir, tmp_path, monkeypatch):
+    monkeypatch.setenv("KEY_FOR_ASK", "sk-only-at-setup")
+    answers = operate.Answers(agents=[package_dir], model_url="https://m.test/v1", api_key="env:KEY_FOR_ASK",
+                              model="m")
+    path = operate.write_deployment(tmp_path, answers, example=False)
+    (tmp_path / "compose.generated.yml").write_text("services: {}\n")
+    monkeypatch.delenv("KEY_FOR_ASK")
+    for name in ("VESSEL_APP_KEY", "VESSEL_APP_KEY_SHA256", "VESSEL_SANDBOX_TOKEN"):
+        monkeypatch.delenv(name, raising=False)
+    calls = []
+
+    def run(command, **kwargs):
+        calls.append(command)
+        if command[:2] == ["docker", "ps"]:
+            return subprocess.CompletedProcess(command, 0, "abc123\n", "")
+        if command[:2] == ["docker", "inspect"]:
+            return subprocess.CompletedProcess(command, 0, "demo:local\n", "")
+        return subprocess.CompletedProcess(command, 0, "", "")
+    monkeypatch.setattr(subprocess, "run", run)
+    agent = next(iter(load_deployment(path).agents))
+    with pytest.raises(SystemExit) as done:
+        operate.client(argparse.Namespace(deployment=str(path), agent=agent, question="hi"), "ask")
+    assert done.value.code == 0
+    assert not any("compose" in c for c in calls)
+    assert calls[-1][:2] == ["docker", "run"] and "demo:local" in calls[-1]
