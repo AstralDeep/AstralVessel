@@ -79,6 +79,7 @@ nav:
       - Rich output: build/rich-output.md
   - Run it:
       - deployment.toml: run/deployment-toml.md
+      - Manual deployment: run/manual-deployment.md
       - Models and egress: run/models-and-egress.md
       - Search: run/search.md
       - Identity, apps and issuers: run/identity.md

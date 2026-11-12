@@ -282,11 +282,14 @@ def test_two_deployments_on_one_host_can_differ_in_project_and_subnet(package_di
     path = tmp_path / "deployment.toml"
     path.write_text(deployment_text(package_dir, mounts=""))
     assert generate(load_deployment(path), repo_root=None)["name"] == "astralvessel"
-    second = '[vessel]\nproject = "infocus"\nfront_subnet = "172.31.248.0/24"\nfront_address = "172.31.248.10"\n'
+    second = '[vessel]\nproject = "second"\nfront_subnet = "172.31.248.0/24"\nfront_address = "172.31.248.10"\n'
     path.write_text(second + deployment_text(package_dir, mounts=""))
     spec = generate(load_deployment(path), repo_root=None)
-    assert spec["name"] == "infocus" and spec["networks"]["front"]["ipam"]["config"][0]["subnet"] == "172.31.248.0/24"
-    for bad in ('[vessel]\nproject = "Bad Name"\n', '[vessel]\nfront_address = "10.0.0.5"\n'):
+    assert spec["name"] == "second" and spec["networks"]["front"]["ipam"]["config"] == [
+        {"subnet": "172.31.248.0/24", "ip_range": "172.31.248.128/25"}]
+    for bad in ('[vessel]\nproject = "Bad Name"\n', '[vessel]\nfront_address = "10.0.0.5"\n',
+                '[vessel]\nfront_address = "172.31.247.200"\n',
+                '[vessel]\nfront_subnet = "172.31.248.0/30"\nfront_address = "172.31.248.1"\n'):
         path.write_text(bad + deployment_text(package_dir, mounts=""))
         with pytest.raises(ValueError):
             load_deployment(path)
@@ -295,17 +298,17 @@ def test_two_deployments_on_one_host_can_differ_in_project_and_subnet(package_di
 def test_a_second_project_keeps_its_own_images_and_folder(package_dir, tmp_path):
     from astralvessel.compose import write
     path = tmp_path / "deployment.toml"
-    second = '[vessel]\nproject = "infocus"\nfront_subnet = "172.31.248.0/24"\nfront_address = "172.31.248.10"\n'
+    second = '[vessel]\nproject = "second"\nfront_subnet = "172.31.248.0/24"\nfront_address = "172.31.248.10"\n'
     path.write_text(second + deployment_text(package_dir, mounts=""))
     repo = tmp_path / "repo"
     (repo / "egress").mkdir(parents=True)
     services = generate(load_deployment(path), repo_root=repo)["services"]
     assert {services[s]["image"] for s in ("vessel", "egress", "sandbox-guide")} == {
-        "infocus:local", "infocus-egress:local"}
+        "second:local", "second-egress:local"}
     out = tmp_path / "compose.generated.yml"
     write(load_deployment(path), out, repo_root=None, master_token="m" * 16)
     path.write_text(deployment_text(package_dir, mounts=""))
-    with pytest.raises(SystemExit, match="infocus"):
+    with pytest.raises(SystemExit, match="second"):
         write(load_deployment(path), out, repo_root=None, master_token="m" * 16)
 
 

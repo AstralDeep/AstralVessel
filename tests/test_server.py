@@ -326,3 +326,58 @@ async def test_an_orchestrator_can_call_the_agent_as_a_structured_skill(vessel, 
     parts = task["artifacts"][0]["parts"]
     assert parts[0]["text"] == "There is one page." and parts[1]["data"]["_ui_components"][0]["value"] == "1"
     assert any(m.get("content") == "How many pages?" for m in model.requests[0]["messages"])
+
+
+# The event contract every caller relies on, checked over the public interface (this replaced the live conformance
+# suite: these are its checks that the tests above did not already make).
+CLIENT_EVENT_TYPES = {"task", "status", "answer", "transcript", "error", "turn.started", "text.delta",
+                      "reasoning.delta", "tool.started", "tool.finished", "step.finished", "turn.finished", "file"}
+LEAK_MARKERS = ("Traceback (most recent call last)", "Exception:", "postgresql://", "sqlite3.", 'File "/',
+                "secret-dsn")
+
+
+async def test_a_turn_keeps_the_event_contract(vessel, model):
+    client, _ = vessel
+    card = await client.card("tester")
+    assert card["supportedInterfaces"][0]["protocolBinding"] == "JSONRPC"
+    assert [(a["id"], a["available"]) for a in await client.agents("alice")] == [("tester", True)]
+    model.replies = [tool_reply("read", {"path": "notes/ada-lovelace.md"}), text_reply("Ada built it.")]
+    events = await collect(client, "alice", "Who built it?")
+    kinds = [e["type"] for e in events]
+    assert set(kinds) <= CLIENT_EVENT_TYPES
+    assert kinds.count("turn.finished") == 1 and kinds[-1] == "turn.finished"
+    finished = events[-1]
+    assert finished["status"] == "ok" and {"tokens", "elapsed_ms", "steps"} <= set(finished)
+    answer = next(e for e in events if e["type"] == "answer")
+    assert kinds.index("answer") < kinds.index("turn.finished") and answer["text"].strip()
+    started = sorted(e["call_id"] for e in events if e["type"] == "tool.started")
+    assert started and started == sorted(e["call_id"] for e in events if e["type"] == "tool.finished")
+    model.replies = [500, 500, 500, 500]
+    failed = await collect(client, "alice", "Again?")
+    blob = repr([{k: v for k, v in e.items() if k != "raw"} for e in events + failed])
+    assert not [m for m in LEAK_MARKERS if m in blob]
+
+
+async def test_the_deployment_can_set_an_agents_model(package_dir, model, tmp_path):
+    path = tmp_path / "deployment.toml"
+    path.write_text(f"""
+[egress]
+upstream_url = "https://models.test/v1"
+[[agents]]
+id = "tester"
+package = "{package_dir}"
+model = "deployment-model"
+[[apps]]
+name = "web"
+key_sha256 = "{sha(APP_KEY)}"
+agents = ["tester"]
+""")
+    settings = settings_for(path, tmp_path)
+    agent = settings.deployment.agents["tester"]
+    assert agent.model == "deployment-model" and agent.package.manifest.model.model == "test-model"
+    app = create_app(settings, model_transport=model.transport())
+    client = VesselClient("http://vessel.test", APP_KEY, transport=httpx.ASGITransport(app=app))
+    events = await collect(client, "alice", "hello")
+    assert model.requests[0]["model"] == "deployment-model"
+    assert transcript_of(events)[1]["model"] == "deployment-model"
+    assert (await client.manifest("tester", "alice"))["model"]["model"] == "deployment-model"

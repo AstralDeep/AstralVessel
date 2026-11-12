@@ -295,7 +295,7 @@ class VesselExecutor(AgentExecutor):
 
     def _model(self) -> ModelClient:
         m = self.agent.package.manifest.model
-        return ModelClient(resolve_setting(m.endpoint), resolve_setting(m.api_key), m.model,
+        return ModelClient(resolve_setting(m.endpoint), resolve_setting(m.api_key), self.agent.model,
                            temperature=m.temperature, max_output_tokens=m.max_output_tokens,
                            transport=self.model_transport)
 
@@ -390,7 +390,7 @@ class VesselExecutor(AgentExecutor):
             await stream.flush()
         try:
             summary = {k: v for k, v in result.items() if k not in ("text", "components")}
-            summary["model"] = self.agent.package.manifest.model.model
+            summary["model"] = self.agent.model
             if wants_transcript:
                 await updater.add_artifact([data_part(transcript.envelope([], summary), transcript.MEDIA_TYPE)],
                                            artifact_id=artifact_id, name="transcript", append=chunks[0] > 0,
@@ -664,7 +664,7 @@ def manifest_endpoint(agent: Agent):
         m = agent.package.manifest
         return JSONResponse({
             "agent": {**m.agent.model_dump(), "id": agent.id},
-            "model": {"model": m.model.model, "max_steps": m.model.max_steps},
+            "model": {"model": agent.model, "max_steps": m.model.max_steps},
             "tools": agent.package.tool_scopes(),
             "sandbox": {"mounts": [x.model_dump() for x in m.sandbox.mounts],
                         "deadline_seconds": m.sandbox.deadline_seconds},

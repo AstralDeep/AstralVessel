@@ -45,8 +45,8 @@ Relative paths (`package`, mount sources, `jwks_file`) are relative to the deplo
 |---|---|
 | `project` | The Compose project name. It prefixes containers, networks, volumes and locally built images. See [Several deployments on one host](several-deployments.md). |
 | `public_url` | The base URL written into agent cards and the agent list. Set it to the address your callers use. |
-| `front_subnet` | The subnet of the internal `front` network. |
-| `front_address` | The vessel's fixed address on `front`; it listens only there, on port 8700. |
+| `front_subnet` | The subnet of the internal `front` network, a /28 or larger. Other containers that join it get addresses from its upper half only. |
+| `front_address` | The vessel's fixed address on `front`, in the lower half of `front_subnet`; it listens only there, on port 8700. |
 | `task_ttl_hours` | Task records not updated for this long are deleted, checked hourly. |
 
 ## [egress]
@@ -71,6 +71,7 @@ See [Models and egress](models-and-egress.md).
 | `id` | Lowercase letters, digits and hyphens, starting with a letter. The agent's address is `/agents/<id>`. |
 | `package` | The agent folder. |
 | `prompt_append` | Extra briefing files from the folder, appended after `prompt.md`. See [Prompts](../build/prompts.md). |
+| `model` | The model this agent uses, overriding the `model` its `vessel.toml` names. `astralvessel up` writes it. |
 | `sandbox` | The sandbox profile. |
 | `services` | Service grants, one per service the agent's tools name. See [Service tools](../build/service-tools.md). |
 

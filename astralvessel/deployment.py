@@ -38,7 +38,18 @@ class VesselSection(Strict):
         subnet = ipaddress.ip_network(self.front_subnet, strict=True)
         if ipaddress.ip_address(self.front_address) not in subnet:
             raise ValueError(f"front_address {self.front_address} is not in front_subnet {self.front_subnet}")
+        if subnet.prefixlen > 28:
+            raise ValueError(f"front_subnet {self.front_subnet} is too small; use a /28 or larger")
+        if ipaddress.ip_address(self.front_address) in self.front_dynamic_range:
+            raise ValueError(f"front_address {self.front_address} must be in the lower half of {self.front_subnet}; "
+                             f"Docker hands out the upper half ({self.front_dynamic_range}) to other containers")
         return self
+
+    @property
+    def front_dynamic_range(self) -> ipaddress.IPv4Network | ipaddress.IPv6Network:
+        # Containers that join front (applications, chat) get addresses only from the upper half, so none can
+        # take the vessel's fixed address while the vessel is stopped.
+        return list(ipaddress.ip_network(self.front_subnet, strict=True).subnets(new_prefix=None))[-1]
 
 
 class EgressSection(Strict):
@@ -133,6 +144,8 @@ class AgentEntry(Strict):
     services: dict[str, ServiceGrant] = {}
     # Extra briefing files from the package, appended after prompt.md: one package can serve as several agents.
     prompt_append: list[str] = []
+    # Overrides the model the package names, so one deployment can set it in one place.
+    model: str | None = Field(default=None, min_length=1)
 
 
 class AppEntry(Strict):
@@ -209,6 +222,11 @@ class Agent(BaseModel):
     profile: SandboxProfile
     services: dict[str, ServiceGrant] = {}
     prompt_append: tuple[str, ...] = ()
+    model_override: str | None = None
+
+    @property
+    def model(self) -> str:
+        return self.model_override or self.package.manifest.model.model
 
     @property
     def fingerprint(self) -> str:
@@ -247,7 +265,8 @@ def load_deployment(path: str | Path, packages_root: str | None = None) -> Deplo
             if not target.is_file() or package.root not in target.parents:
                 raise ValueError(f"agent {entry.id}: prompt_append {name} must be a file inside the package")
         agents[entry.id] = Agent(id=entry.id, package=package, host_package=host, profile=entry.sandbox,
-                                 services=entry.services, prompt_append=tuple(entry.prompt_append))
+                                 services=entry.services, prompt_append=tuple(entry.prompt_append),
+                                 model_override=entry.model)
     # Inside the vessel container each key file is mounted at <VESSEL_JWKS_DIR>/<issuer id>.json.
     jwks_dir = os.environ.get("VESSEL_JWKS_DIR")
     issuers = [i.model_copy(update={"jwks_file": f"{jwks_dir}/{i.id}.json" if jwks_dir

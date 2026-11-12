@@ -8,8 +8,8 @@ page says what is supported and what has not been checked.
 | Linux 6.12 or newer, x86_64 or arm64, with Landlock ABI 6 | Supported. CI runs the tests and the isolation probes on Ubuntu 24.04 runners (x86_64). |
 | Linux older than 6.12, or with Landlock disabled | Not supported. Sandboxes refuse to start. |
 | Other CPU architectures | Not supported. The seccomp filter exists only for x86_64 and aarch64; elsewhere every confined call fails. |
-| macOS with Docker Desktop | **Unverified.** Containers run in Docker Desktop's Linux VM; whether its kernel offers Landlock ABI 6 has not been checked. |
-| Windows with Docker Desktop | **Unverified**, for the same reason. |
+| macOS with Docker Desktop, Apple silicon | Supported. Containers run in Docker Desktop's Linux VM, whose kernel offers Landlock ABI 6. Checked on Docker Desktop 29.5 (VM kernel 6.12) with `astralvessel up --example`: all isolation probes passed. Older Docker Desktop versions may ship an older kernel; the sandbox then refuses to start and `up` shows why. |
+| Windows with Docker Desktop | **Unverified.** Containers run in Docker Desktop's Linux VM (WSL 2); whether its kernel offers Landlock ABI 6 has not been checked. |
 
 Released images are built for amd64 and arm64.
 

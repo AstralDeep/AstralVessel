@@ -21,7 +21,9 @@ BOUNDS = (("gt", ">"), ("ge", ">="), ("lt", "<"), ("le", "<="), ("min_length", "
 # Checks made by validators, which the field metadata cannot show.
 CHECKS = {
     "VesselSection": ["`front_address` must be inside `front_subnet`, and `front_subnet` must be a network "
-                      "address (`172.31.247.0/24`, not `172.31.247.1/24`)."],
+                      "address (`172.31.247.0/24`, not `172.31.247.1/24`).",
+                      "`front_subnet` must be a /28 or larger, and `front_address` must be in its lower half; "
+                      "other containers on `front` get addresses from the upper half."],
     "ToolsSection": ["Every `builtin` entry must be one of `read`, `grep`, `glob`, `list`, `bash`, `webfetch`, "
                      "`websearch`."],
     "DeclaredTool": ["Exactly one of `command` or `service`.", "A service tool needs `path`, with no `..` segment.",

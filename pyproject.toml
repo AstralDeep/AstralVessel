@@ -41,6 +41,11 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["astralvessel"]
 
+# The example agent and its data ship in the package, so astralvessel up --example needs no checkout.
+[tool.hatch.build.targets.wheel.force-include]
+"examples/field-guide" = "astralvessel/example/field-guide"
+"examples/sample-data" = "astralvessel/example/sample-data"
+
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
 testpaths = ["tests"]
