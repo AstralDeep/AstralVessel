@@ -61,7 +61,8 @@ class Stack:
         # Found by Compose's labels, not `docker compose ps`, which needs every env: variable even though the
         # client uses none of them (the model key may live only in the operator's shell).
         done = subprocess.run(["docker", "ps", "-q", "--filter", f"label=com.docker.compose.project={project}",
-                               "--filter", f"label=com.docker.compose.service={service}"],
+                               "--filter", f"label=com.docker.compose.service={service}",
+                               "--filter", "label=com.docker.compose.oneoff=False"],
                               check=False, text=True, capture_output=True)
         if done.returncode != 0:
             raise SystemExit((done.stderr or "docker ps failed").strip())

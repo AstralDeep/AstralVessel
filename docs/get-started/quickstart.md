@@ -5,8 +5,8 @@ time goes to pulling the images.
 
 ## Before you start
 
-You need a Linux host with kernel 6.12 or newer (Landlock ABI 6), Docker with Compose, and an OpenAI-compatible
-model endpoint with an API key.
+You need Docker with Compose on Linux with kernel 6.12 or newer (Landlock ABI 6), or Docker Desktop on a Mac with
+Apple silicon, plus an OpenAI-compatible model endpoint with an API key. See [Platform support](../security/platforms.md).
 
 ## 1. Install
 

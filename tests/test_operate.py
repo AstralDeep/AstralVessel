@@ -239,6 +239,7 @@ def test_ask_needs_the_app_key_but_not_the_model_key(package_dir, tmp_path, monk
     def run(command, **kwargs):
         calls.append(command)
         if command[:2] == ["docker", "ps"]:
+            assert "label=com.docker.compose.oneoff=False" in command
             return subprocess.CompletedProcess(command, 0, "abc123\n", "")
         if command[:2] == ["docker", "inspect"]:
             return subprocess.CompletedProcess(command, 0, "demo:local\n", "")
