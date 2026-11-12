@@ -237,7 +237,7 @@ docker compose -f compose.generated.yml --env-file .env up -d --build
 set -a; . ./.env; set +a
 for agent in field-guide field-guide-reader; do
   docker run --rm --network astralvessel_front -v "$PWD/../conformance:/conformance:ro" astralvessel:local \
-    python /conformance/run.py http://172.31.247.10:8700 "$VESSEL_APP_KEY" $agent
+    python /conformance/run.py http://vessel:8700 "$VESSEL_APP_KEY" $agent
 done                                     # 20 conformance checks per agent
 ```
 
@@ -247,7 +247,7 @@ To run a second deployment on the same host, give it its own `project` and front
 (for example `project = "second"`, `front_subnet = "172.31.248.0/24"`, `front_address = "172.31.248.10"`).
 Keep each deployment in its own folder, since its generated secrets sit beside its Compose file. The
 project name prefixes its containers, networks, volumes and locally built images; the conformance run
-above then uses `--network <project>_front` and that deployment's `front_address`.
+above then uses `--network <project>_front`; the vessel is still `http://vessel:8700` there.
 
 ## Develop
 

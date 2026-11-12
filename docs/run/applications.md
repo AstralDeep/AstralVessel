@@ -15,7 +15,7 @@ services:
   app:
     image: my-app:latest
     environment:
-      VESSEL_URL: http://172.31.247.10:8700
+      VESSEL_URL: http://vessel:8700
     networks: [default, vessel]
 
 networks:
@@ -24,7 +24,8 @@ networks:
     name: astralvessel_front
 ```
 
-The vessel listens at `front_address` on port 8700. The `front` network is internal, so it gives no route out;
+The vessel listens at `front_address` on port 8700, and containers on `front` reach it by name as
+`http://vessel:8700`. The `front` network is internal, so it gives no route out;
 keep your application on its own network too for anything else it needs. A service grant's `url` names your
 application as the vessel would reach it on this network.
 
@@ -47,7 +48,7 @@ The bundled [Python client](../reference/python.md) does steps 1 to 3, and its h
 from astralvessel.client import VesselClient, transcript_of
 from astralvessel.history import HistoryStore, new_id
 
-client = VesselClient("http://172.31.247.10:8700", app_key)
+client = VesselClient("http://vessel:8700", app_key)
 store = HistoryStore("conversations.sqlite")
 
 async def ask(user: str, conversation_id: str, question: str) -> str:

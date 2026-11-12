@@ -29,12 +29,14 @@ front_address = "172.31.248.10"
 
 ## Reach the second deployment
 
-Applications attach to `second_front` and call `http://172.31.248.10:8700`. The conformance run from the
+Applications attach to `second_front` and call `http://vessel:8700`. An application attached to more than one
+deployment's `front` network should use the container name instead, such as `http://second-vessel-1:8700`, because
+`vessel` would match both. The conformance run from the
 [Quickstart](../get-started/quickstart.md) becomes:
 
 ```bash
 docker run --rm --network second_front -v "$PWD/../conformance:/conformance:ro" second:local \
-  python /conformance/run.py http://172.31.248.10:8700 "$VESSEL_APP_KEY" field-guide
+  python /conformance/run.py http://vessel:8700 "$VESSEL_APP_KEY" field-guide
 ```
 
 Docker volumes named with `volume:NAME` mount sources are external and not prefixed, so two deployments can mount
