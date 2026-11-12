@@ -113,7 +113,7 @@ import asyncio, os
 from astralvessel.client import VesselClient
 
 async def main():
-    client = VesselClient("http://172.31.247.10:8700", os.environ["VESSEL_APP_KEY"])
+    client = VesselClient("http://vessel:8700", os.environ["VESSEL_APP_KEY"])
     async for event in client.stream("field-guide", "alice", "Which birds in the guide hunt fish?"):
         if event["type"] == "tool.started":
             print(f"\n[{event['name']}]")
@@ -127,8 +127,9 @@ asyncio.run(main())
 PY
 ```
 
-`172.31.247.10` is the default `front_address`, and `alice` is the end user your application names. The answer
-streams as `text.delta` events too; this script prints only the finished answer.
+Containers on the `front` network reach the vessel by its service name, `vessel`. `alice` is the user ID your
+application sends with each turn. The script prints the finished answer; the text also arrives word by word as
+`text.delta` events.
 
 ## 7. Run the conformance checks (optional)
 
@@ -137,7 +138,7 @@ The conformance suite drives an agent over its public interfaces with real model
 ```bash
 for agent in field-guide field-guide-reader; do
   docker run --rm --network astralvessel_front -v "$PWD/../conformance:/conformance:ro" astralvessel:local \
-    python /conformance/run.py http://172.31.247.10:8700 "$VESSEL_APP_KEY" $agent
+    python /conformance/run.py http://vessel:8700 "$VESSEL_APP_KEY" $agent
 done
 ```
 

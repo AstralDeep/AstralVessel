@@ -10,7 +10,7 @@ import asyncio
 from astralvessel.client import VesselClient, transcript_of
 
 async def main():
-    client = VesselClient("http://172.31.247.10:8700", "app-key")
+    client = VesselClient("http://vessel:8700", "app-key")
     events = [e async for e in client.stream("field-guide", "alice", "Which birds hunt fish?")]
     print(next(e["text"] for e in events if e["type"] == "answer"))
     messages, turn = transcript_of(events)   # store these as history

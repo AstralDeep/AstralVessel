@@ -54,7 +54,7 @@ Send `A2A-Version: 1.0` with each request, and `Accept: text/event-stream` for s
 ## Sending a turn
 
 ```bash
-curl -N http://172.31.247.10:8700/agents/field-guide \
+curl -N http://vessel:8700/agents/field-guide \
   -H "Authorization: Bearer $VESSEL_APP_KEY" -H "X-Vessel-User: alice" \
   -H "A2A-Version: 1.0" -H "Accept: text/event-stream" -H "Content-Type: application/json" \
   -d '{"jsonrpc": "2.0", "id": "1", "method": "SendStreamingMessage", "params": {

@@ -237,7 +237,7 @@ docker compose -f compose.generated.yml --env-file .env up -d --build
 set -a; . ./.env; set +a
 for agent in field-guide field-guide-reader; do
   docker run --rm --network astralvessel_front -v "$PWD/../conformance:/conformance:ro" astralvessel:local \
-    python /conformance/run.py http://172.31.247.10:8700 "$VESSEL_APP_KEY" $agent
+    python /conformance/run.py http://vessel:8700 "$VESSEL_APP_KEY" $agent
 done                                     # 20 conformance checks per agent
 ```
 
