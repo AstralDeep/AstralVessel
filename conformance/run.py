@@ -14,7 +14,7 @@ from astralvessel.client import VesselClient, transcript_of
 EVENT_TYPES = {"task", "status", "answer", "transcript", "error", "turn.started", "text.delta", "reasoning.delta",
                "tool.started",
                "tool.finished", "step.finished", "turn.finished", "file"}
-STATUSES = {"ok", "cancelled", "deadline", "step_limit", "model_error", "tool_error"}
+STATUSES = {"ok", "cancelled", "deadline", "step_limit", "model_error"}
 LEAK_MARKERS = ("Traceback (most recent call last)", "Exception:", "postgresql://", "sqlite3.", "File \"/")
 
 results: list[tuple[str, bool, str]] = []

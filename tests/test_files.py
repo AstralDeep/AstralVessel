@@ -221,3 +221,13 @@ async def test_the_model_sees_attached_files_even_when_the_output_is_clipped(pac
     tool_message = model.requests[1]["messages"][-1]["content"]
     assert "output truncated" in tool_message and tool_message.endswith("to the answer]")
     assert [e["name"] for e in events if e["type"] == "file.added"] == ["chart-0.png"]
+
+
+async def test_a_turn_without_files_reports_an_empty_files_list(file_vessel, model):
+    model.replies = [text_reply("No charts needed.")]
+    client = file_vessel(0)
+    events = [e async for e in client.stream("tester", "alice", "just answer")]
+    finished = next(e for e in events if e["type"] == "turn.finished")
+    assert finished["files"] == []
+    stored = await client.rpc("tester", "alice", "GetTask", {"id": finished["task_id"]})
+    assert stored["result"]["status"]["message"]["parts"][0]["data"]["files"] == []

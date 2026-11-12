@@ -3,6 +3,12 @@
 Changes by version, summarized from the repository's history. 0.5.0 is the first published release; the earlier
 version numbers follow the milestones in that history and were never published.
 
+## Unreleased
+
+- `tool_error` is no longer a turn status; it was reserved and never produced. A failed tool call never ends a
+  turn.
+- `turn.finished` is documented as always carrying `files`, `[]` when none, with a regression test.
+
 ## 0.5.0 (2026-11-11)
 
 - A workspace per turn that its tool calls share, deleted when the turn ends.
