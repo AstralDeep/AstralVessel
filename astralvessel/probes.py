@@ -13,7 +13,7 @@ from .deployment import Deployment, size_bytes
 from .stack import Stack
 
 PRELUDE = r'''
-import glob, hashlib, json, os, socket, subprocess, sys
+import errno, glob, hashlib, json, os, socket, subprocess, sys
 CFG = json.loads(CFG_JSON)
 def out(name, ok, skip=""):
     print(json.dumps({"name": name, "ok": bool(ok), "skip": skip}), flush=True)
@@ -23,11 +23,12 @@ def reach(host, port):
         return True
     except OSError:
         return False
-def refused(fn):
+def refused(fn, codes=None):
+    # Only the expected error counts: a missing folder or a lucky permission error must not pass a probe.
     try:
         fn()
-    except OSError:
-        return True
+    except OSError as exc:
+        return codes is None or exc.errno in codes
     return False
 '''
 
@@ -36,7 +37,7 @@ out("has no route to the internet", not reach("1.1.1.1", 443))
 out("cannot resolve or reach the egress", not reach("egress", 8080))
 out("the model host is known to the probes", bool(CFG["model_host"]))
 if CFG["model_host"]:
-    out("cannot reach the model host directly", not reach(CFG["model_host"], 443))
+    out("cannot reach the model host directly", not reach(CFG["model_host"], CFG["model_port"]))
 out("cannot reach the vessel API", not reach("vessel", 8700))
 out("cannot reach the vessel's front address", not reach(CFG["front"], 8700))
 for other in CFG["others"]:
@@ -50,7 +51,7 @@ keys = ("VESSEL_APP_KEY", "VESSEL_APP_KEY_SHA256", "VESSEL_MODEL_KEY", "LLM_API_
 out("environment holds no model or app key", not any(k in os.environ for k in keys))
 token = os.environ.get("VESSEL_SANDBOX_TOKEN", "")
 out("holds its own token, not the master", bool(token) and hashlib.sha256(token.encode()).hexdigest() != CFG["master"])
-out("root filesystem is read-only", refused(lambda: open("/opt/probe-write", "w")))
+out("root filesystem is read-only", refused(lambda: open("/opt/probe-write", "w"), {errno.EROFS}))
 script = "/tmp/probe-noexec.sh"
 with open(script, "w") as handle:
     handle.write("#!/bin/sh\necho ran\n")
@@ -58,7 +59,8 @@ os.chmod(script, 0o755)
 out("scratch space is noexec", refused(lambda: subprocess.run([script], capture_output=True)))
 os.unlink(script)
 for target in CFG["mounts"]:
-    out(f"{target} is mounted read-only", refused(lambda: open(os.path.join(target, ".probe-write"), "x")))
+    out(f"{target} is mounted read-only", os.path.isdir(target) and
+        refused(lambda: open(os.path.join(target, ".probe-write"), "x"), {errno.EROFS}))
 '''
 
 SANDBOX_AFTER = r'''
@@ -89,7 +91,10 @@ async def main():
         return await r.run(name, args, key, owner=owner)
 
     s1, s2 = CFG["sleep"]
-    await run("bash", {"command": f"setsid sleep {s1} >/dev/null 2>&1 & nohup sleep {s2} >/dev/null 2>&1 &"})
+    got, _ = await run("bash", {"command": f"setsid sleep {s1} >/dev/null 2>&1 & nohup sleep {s2} >/dev/null 2>&1 & "
+                                "echo started=$!"})
+    out("a call can start a background process (for the next probe)", "started=" in got and
+        got.split("started=")[-1].strip()[:1].isdigit())
     await run("bash", {"command": "true"})
 
     holder = asyncio.create_task(run("bash", {"command": "echo private-note > $TMPDIR/note; sleep 4"}))
@@ -254,16 +259,17 @@ def _run(stack: Stack, report: Report, label: str, service: str, body: str, conf
         report.add(label, {"name": "probe script finished", "ok": False})
 
 
-def model_host(stack: Stack) -> str:
+def model_host(stack: Stack) -> tuple[str, int]:
     done = stack.python("egress", "import os; print(os.environ.get('LLM_BASE_URL', ''))")
-    return urllib.parse.urlsplit(done.stdout.strip()).hostname or ""
+    parts = urllib.parse.urlsplit(done.stdout.strip())
+    return parts.hostname or "", parts.port or (80 if parts.scheme == "http" else 443)
 
 
 def run_probes(stack: Stack, deployment: Deployment, master: str) -> Report:
     report = Report()
     search = deployment.search.provider == "searxng"
     front = deployment.vessel.front_address
-    host = model_host(stack)
+    host, port = model_host(stack)
     ids = list(deployment.agents)
     sleeps = [str(6000 + secrets.randbelow(999)), str(7000 + secrets.randbelow(999))]
     for agent_id, agent in deployment.agents.items():
@@ -271,7 +277,7 @@ def run_probes(stack: Stack, deployment: Deployment, master: str) -> Report:
         keys = [secrets.token_hex(16) for _ in range(6)]
         mounts = [m.target for m in agent.profile.mounts]
         _run(stack, report, service, service, SANDBOX, {
-            "model_host": host, "front": front, "search": search, "mounts": mounts,
+            "model_host": host, "model_port": port, "front": front, "search": search, "mounts": mounts,
             "others": [f"sandbox-{other}" for other in ids if other != agent_id],
             "master": hashlib.sha256(master.encode()).hexdigest()})
         _run(stack, report, f"{agent_id} calls", "vessel", CALLS, {

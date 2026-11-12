@@ -58,8 +58,9 @@ It exits non-zero if any step fails, and leaves the containers running so you ca
 astralvessel check [deployment]
 ```
 
-Runs the [isolation probes](../security/isolation.md) against a running deployment: every agent's sandbox and calls,
-the vessel, the egress proxy and search. Prints `PASS`, `FAIL` or `SKIP` for each and exits non-zero if any fails.
+Runs the [isolation probes](../security/isolation.md) against a running deployment: every agent's sandbox and calls, the
+vessel, the egress proxy and search. Prints `PASS`, `FAIL` or `SKIP` for each and exits non-zero if any fails. Run it on
+an idle deployment.
 
 ## astralvessel chat
 
@@ -67,9 +68,10 @@ the vessel, the egress proxy and search. Prints `PASS`, `FAIL` or `SKIP` for eac
 astralvessel chat AGENT [--resume ID] [--list] [--deployment FILE]
 ```
 
-A conversation with one agent in the terminal. Each turn sends the chat's history and stores the transcript that
-comes back in `chats/chats.sqlite`, through the [history store](python.md). Files a tool returns are saved in
-`chats/files/<chat id>/`. Ctrl-C stops the current answer, on the vessel too; `/exit` or Ctrl-D leaves.
+A conversation with one agent in the terminal. Each turn sends the chat's history and stores the transcript that comes
+back in `chats/chats.sqlite`, through the [history store](python.md). A turn stopped with Ctrl-C is not saved. Files a
+tool returns are saved in `chats/files/<chat id>/`. Ctrl-C stops the current answer, on the vessel too; `/exit` or
+Ctrl-D leaves.
 
 | Option | Meaning |
 |---|---|
@@ -84,9 +86,13 @@ astralvessel ask AGENT QUESTION [--deployment FILE]
 
 One turn with no history; files go to `chats/files/ask/`. Exits non-zero unless the turn finishes `ok`.
 
+If the deployment reads a key with `env:NAME`, that variable must be set for `check`, `chat`, `ask` and `down` too,
+because Compose fills it in for every command; they stop and name it if it is missing.
+
 `chat` and `ask` run the client in a short-lived container on the deployment's internal `front` network, because the
 vessel publishes no ports. The container uses the vessel's own image, runs as your user with a read-only root, no
-capabilities and at most 64 processes, gets `VESSEL_APP_KEY` from the environment, and mounts only `chats/`.
+capabilities, at most 64 processes and 512 MB of memory, gets `VESSEL_APP_KEY` from the environment, and mounts only
+`chats/`.
 
 ## astralvessel down
 

@@ -62,7 +62,7 @@ It reports success only if every step passes:
 PASS  sandbox-field-guide: has no route to the internet
 ...
 PASS  model your-model-name answers through the egress
-42 probes passed, 0 failed, 0 skipped
+43 probes passed, 0 failed, 0 skipped
 
 ready: field-guide
   astralvessel chat field-guide

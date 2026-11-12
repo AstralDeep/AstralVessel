@@ -17,7 +17,10 @@ def load_env_file(path: Path) -> None:
         line = line.strip()
         if line and not line.startswith("#") and "=" in line:
             key, value = line.split("=", 1)
-            os.environ.setdefault(key.strip(), value.strip().strip("\"'"))
+            value = value.strip()
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+                value = value[1:-1]  # one matching pair of quotes, as Compose reads it
+            os.environ.setdefault(key.strip(), value)
 
 
 @dataclass
@@ -55,7 +58,10 @@ class Stack:
         return (done.stdout or "") + (done.stderr or "")
 
     def container_image(self, service: str) -> str:
-        found = self.compose("ps", "-q", service, check=False, capture=True).stdout.strip()
+        done = self.compose("ps", "-q", service, check=False, capture=True)
+        if done.returncode != 0:
+            raise SystemExit((done.stderr or "docker compose ps failed").strip())
+        found = done.stdout.strip()
         if not found:
             raise SystemExit(f"the {service} container is not running; start the deployment with astralvessel up")
         return subprocess.run(["docker", "inspect", "-f", "{{.Config.Image}}", found.splitlines()[0]],

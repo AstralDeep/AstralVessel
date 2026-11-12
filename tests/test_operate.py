@@ -86,13 +86,13 @@ def test_prompts_take_a_hidden_key_and_retry_bad_answers(tmp_path, monkeypatch, 
     folder.mkdir()
     operate.write_deployment(folder, got, example=False)
     env = (folder / ".env").read_text()
-    assert "VESSEL_UPSTREAM_MODEL_KEY=sk-typed" in env and "VESSEL_APP_KEY_SHA256=" in env
+    assert "VESSEL_UPSTREAM_MODEL_KEY='sk-typed'" in env and "VESSEL_APP_KEY_SHA256=" in env
     assert load_deployment(folder / "deployment.toml").agents["tester"].model == "m1"
 
 
 def test_a_free_subnet_and_project_name_are_chosen(monkeypatch, tmp_path):
     def docker(*args):
-        if args[:2] == ("network", "ls"):
+        if args == ("network", "ls", "-q"):
             return "n1\n"
         if args[:2] == ("network", "inspect"):
             return "172.31.247.0/24 172.17.0.0/16"
@@ -144,3 +144,82 @@ def test_the_model_check_fails_on_an_error_or_a_missing_answer():
     bad = FakeStack([json.dumps({"model": "m1", "code": 401, "detail": "invalid key"})])
     assert operate.check_models(bad, deployment) is False
     assert operate.check_models(FakeStack([""]), deployment) is False
+
+
+def _named(package_dir, tmp_path, name):
+    import shutil
+    copy = tmp_path / f"pkg-{name}-{len(list(tmp_path.iterdir()))}"
+    shutil.copytree(package_dir, copy)
+    manifest = copy / "vessel.toml"
+    manifest.write_text(manifest.read_text().replace('name = "tester"', f'name = "{name}"'))
+    return copy
+
+
+def test_mount_folders_are_expanded_and_must_exist(package_dir, tmp_path, monkeypatch):
+    (package_dir / "vessel.toml").write_text((package_dir / "vessel.toml").read_text().replace(
+        "[sandbox]", '[sandbox]\nmounts = [{ source = "notes", target = "/notes" }]'))
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "notes").mkdir()
+    base = {"agent": [str(package_dir)], "model_url": "https://m.test/v1", "model": "m", "api_key": "env:HOME"}
+    got = operate.gather(options(**base, mount=["agent:/notes=~/notes"]), interactive=False)
+    assert got.mounts[(0, "/notes")] == str(tmp_path / "notes")
+    with pytest.raises(SystemExit, match="is not a folder"):
+        operate.gather(options(**base, mount=["agent:/notes=~/missing"]), interactive=False)
+
+
+def test_the_example_is_never_copied_over_existing_folders(tmp_path, monkeypatch):
+    monkeypatch.setenv("KEY_FOR_TEST", "x")
+    answers = operate.gather(options(example=True, model_url="https://m.test/v1", model="m",
+                                     api_key="env:KEY_FOR_TEST"), interactive=False)
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "mine.md").write_text("mine")
+    with pytest.raises(SystemExit, match="already exist"):
+        operate.write_deployment(tmp_path, answers, example=True)
+    assert [p.name for p in (tmp_path / "data").iterdir()] == ["mine.md"] and not (tmp_path / ".env").exists()
+
+
+def test_agent_ids_stay_unique_and_the_gitignore_is_extended(package_dir, tmp_path, monkeypatch):
+    monkeypatch.setenv("KEY_FOR_TEST", "x")
+    agents = [_named(package_dir, tmp_path, n) for n in ("x-2", "x", "x")]
+    answers = operate.Answers(agents=agents, model_url="https://m.test/v1", api_key="env:KEY_FOR_TEST", model="m")
+    folder = tmp_path / "deploy"
+    folder.mkdir()
+    (folder / ".gitignore").write_text("node_modules/")
+    operate.write_deployment(folder, answers, example=False)
+    assert list(load_deployment(folder / "deployment.toml").agents) == ["x-2", "x", "x-3"]
+    assert (folder / ".gitignore").read_text() == "node_modules/\n.env\n.generated/\ncompose.generated.yml\nchats/\n"
+
+
+def test_a_key_with_shell_characters_survives_the_env_file(package_dir, tmp_path, monkeypatch):
+    from astralvessel.stack import load_env_file
+    answers = operate.Answers(agents=[package_dir], model_url="https://m.test/v1", api_key="ab$cd#x y", model="m")
+    operate.write_deployment(tmp_path, answers, example=False)
+    monkeypatch.delenv("VESSEL_UPSTREAM_MODEL_KEY", raising=False)
+    load_env_file(tmp_path / ".env")
+    assert operate.os.environ["VESSEL_UPSTREAM_MODEL_KEY"] == "ab$cd#x y"
+    assert operate._check_key("it's") and operate._check_key("a\nb")
+
+
+def test_a_failed_write_leaves_nothing_behind(package_dir, tmp_path, monkeypatch):
+    def broken(path):
+        raise OSError("disk went away")
+    monkeypatch.setattr(operate, "load_deployment", broken)
+    answers = operate.Answers(agents=[package_dir], model_url="https://m.test/v1", api_key="k", model="m")
+    with pytest.raises(OSError):
+        operate.write_deployment(tmp_path, answers, example=False)
+    assert not (tmp_path / ".env").exists() and not (tmp_path / "deployment.toml").exists()
+
+
+def test_a_stopped_deployments_name_is_not_reused(monkeypatch, tmp_path):
+    def docker(*args):
+        if args[0] == "volume" and "label=com.docker.compose.project=demo" in args:
+            return "demo_vessel_data\n"
+        return ""
+    monkeypatch.setattr(operate, "_docker", docker)
+    assert operate.pick_project(tmp_path / "demo") == "demo-2"
+
+
+def test_provider_errors_are_scrubbed_of_key_like_text():
+    body = '{"error": "Incorrect API key sk-abc123***xyz9 provided", "id": "a1b2c3d4e5f6g7h8i9j0k1l2m3"}'
+    text = operate._scrub(body)
+    assert "sk-abc" not in text and "a1b2c3d4e5f6" not in text and "Incorrect API key" in text

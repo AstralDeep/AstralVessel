@@ -86,6 +86,8 @@ def _check_key(key: str) -> str | None:
         if not os.environ.get(name):
             return f"{name} is not set in this shell"
         return None
+    if any(c in key for c in "'\n\r"):
+        return "the API key cannot contain quotes or line breaks"
     return None if key else "the API key is empty"
 
 
@@ -122,7 +124,10 @@ def gather(args: argparse.Namespace, interactive: bool) -> Answers:
                       if a.name == match[1] or str(a) == str(Path(match[1]).expanduser().resolve())), None)
         if index is None:
             raise SystemExit(f"--mount {grant}: {match[1]} is not one of the agents")
-        answers.mounts[(index, match[2])] = match[3]
+        folder = Path(match[3]).expanduser().resolve()
+        if not folder.is_dir():
+            raise SystemExit(f"--mount {grant}: {folder} is not a folder")
+        answers.mounts[(index, match[2])] = str(folder)
     if not interactive:
         missing = [flag for flag, have in (("--agent (or --example)", answers.agents), ("--model-url",
                    answers.model_url), ("--api-key env:NAME", answers.api_key), ("--model", answers.model)) if not have]
@@ -146,7 +151,7 @@ def gather(args: argparse.Namespace, interactive: bool) -> Answers:
             while (index, mount.target) not in answers.mounts:
                 folder = _ask(f"Folder to mount read-only at {mount.target} for {agent.name}: ")
                 if Path(folder).expanduser().is_dir():
-                    answers.mounts[(index, mount.target)] = folder
+                    answers.mounts[(index, mount.target)] = str(Path(folder).expanduser().resolve())
                 else:
                     print(f"  {folder} is not a folder")
     while not answers.model_url:
@@ -183,9 +188,13 @@ def pick_project(folder: Path) -> str:
     base = _slug(folder.name)
     for n in range(1, 50):
         name = base if n == 1 else f"{base[:60]}-{n}"
-        dirs = set(_docker("ps", "-a", "--filter", f"label=com.docker.compose.project={name}", "--format",
+        label = f"label=com.docker.compose.project={name}"
+        dirs = set(_docker("ps", "-a", "--filter", label, "--format",
                            '{{.Label "com.docker.compose.project.working_dir"}}').split())
-        if not dirs or dirs == {str(folder)}:
+        # A stopped deployment keeps its volumes and networks; reusing its name would reuse its task store.
+        leftovers = (_docker("volume", "ls", "-q", "--filter", label) + _docker("network", "ls", "-q", "--filter",
+                                                                                   label)).split()
+        if (not dirs and not leftovers) or dirs == {str(folder)}:
             return name
     raise SystemExit("could not find a free project name; set [vessel] project yourself")
 
@@ -208,7 +217,7 @@ def pick_subnet() -> ipaddress.IPv4Network:
 
 
 def _toml(value: str) -> str:
-    return json.dumps(value)
+    return json.dumps(value, ensure_ascii=False)
 
 
 def _relative(path: Path, folder: Path) -> str:
@@ -225,9 +234,12 @@ def write_deployment(folder: Path, answers: Answers, *, example: bool) -> Path:
     agents = list(answers.agents)
     mounts = dict(answers.mounts)
     if example:
-        # Copy the example in, so the deployment folder holds everything it runs.
-        shutil.copytree(agents[0], folder / "agents" / "field-guide", dirs_exist_ok=True)
-        shutil.copytree(mounts[(0, "/data")], folder / "data", dirs_exist_ok=True)
+        # Copy the example in, so the deployment folder holds everything it runs; never into folders already there.
+        taken = [str(p) for p in (folder / "agents" / "field-guide", folder / "data") if p.exists()]
+        if taken:
+            raise SystemExit(f"{', '.join(taken)} already exist; run --example in an empty folder")
+        shutil.copytree(agents[0], folder / "agents" / "field-guide")
+        shutil.copytree(mounts[(0, "/data")], folder / "data")
         agents[0], mounts[(0, "/data")] = folder / "agents" / "field-guide", str(folder / "data")
     subnet = pick_subnet()
     lines = ["# Written by astralvessel up. Edit it and run astralvessel up again to apply a change.", "",
@@ -240,9 +252,10 @@ def write_deployment(folder: Path, answers: Answers, *, example: bool) -> Path:
     for index, agent in enumerate(agents):
         package = load_package(agent)
         base = package.manifest.agent.name if re.fullmatch(AGENT_ID, package.manifest.agent.name) else "agent"
-        agent_id = base
+        agent_id, n = base, 1
         while agent_id in ids:
-            agent_id = f"{base[:58]}-{len(ids) + 1}"
+            n += 1
+            agent_id = f"{base[:58]}-{n}"
         ids.append(agent_id)
         lines += ["[[agents]]", f"id = {_toml(agent_id)}", f"package = {_toml(_relative(agent, folder))}",
                   f"model = {_toml(answers.model)}"]
@@ -260,20 +273,27 @@ def write_deployment(folder: Path, answers: Answers, *, example: bool) -> Path:
               "VESSEL_SANDBOX_TOKEN": secrets.token_urlsafe(32)}
     if not answers.api_key.startswith("env:"):
         values[KEY_VARIABLE] = answers.api_key
-    text = "".join(f"{k}={v}\n" for k, v in values.items())
+    # Single quotes keep a key with $, # or spaces literal for Compose's env file and for load_env_file.
+    text = "".join(f"{k}='{v}'\n" for k, v in values.items())
     fd = os.open(env, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    with os.fdopen(fd, "w") as handle:
-        handle.write("# Secrets for this deployment; keep this file private.\n" + text)
-    gitignore = folder / ".gitignore"
-    if not gitignore.exists():
-        gitignore.write_text(".env\n.generated/\ncompose.generated.yml\nchats/\n")
-    deployment.write_text("\n".join(lines))
     try:
+        with os.fdopen(fd, "w") as handle:
+            handle.write("# Secrets for this deployment; keep this file private.\n" + text)
+        deployment.write_text("\n".join(lines))
         load_deployment(deployment)
-    except ValueError:
-        deployment.unlink()
-        env.unlink()
+    except BaseException:
+        # Leave nothing half written, so the next up starts over cleanly.
+        deployment.unlink(missing_ok=True)
+        env.unlink(missing_ok=True)
         raise
+    gitignore = folder / ".gitignore"
+    existing = gitignore.read_text() if gitignore.exists() else ""
+    needed = [line for line in (".env", ".generated/", "compose.generated.yml", "chats/")
+              if line not in existing.splitlines()]
+    if needed:
+        lead = "\n" if existing and not existing.endswith("\n") else ""
+        with gitignore.open("a") as handle:
+            handle.write(lead + "\n".join(needed) + "\n")
     print(f"wrote {deployment} and {env} (private)")
     return deployment
 
@@ -301,6 +321,12 @@ def _missing_env(deployment: Deployment) -> list[str]:
     return [r[4:] for r in refs if r.startswith("env:") and not os.environ.get(r[4:])]
 
 
+def _require_env(stack: Stack, deployment: Deployment) -> None:
+    # Compose fills every env: reference in the whole file for every command, so a missing one breaks them all.
+    if missing := _missing_env(deployment):
+        raise SystemExit(f"set {', '.join(missing)} in the environment or {stack.env_file}")
+
+
 def wait_ready(stack: Stack, deployment: Deployment, timeout: float) -> bool:
     deadline = time.monotonic() + timeout
     agents: dict[str, bool] = {}
@@ -315,9 +341,10 @@ def wait_ready(stack: Stack, deployment: Deployment, timeout: float) -> bool:
             print(" ready")
             return True
         states = stack.compose("ps", "-a", "--format", "{{.Service}} {{.State}}", check=False, capture=True).stdout
-        dead = [line.split()[0] for line in states.splitlines() if line.split()[1:2] in (["exited"], ["dead"])]
+        stopped = (["exited"], ["dead"], ["restarting"])
+        dead = [line.split()[0] for line in states.splitlines() if line.split()[1:2] in stopped]
         if dead:
-            print(f"\nstopped: {', '.join(dead)} exited")
+            print(f"\nstopped: {', '.join(dead)} exited or is restarting")
             for service in dead:
                 print(f"--- {service} ---\n{stack.logs(service)}")
             return False
@@ -329,6 +356,11 @@ def wait_ready(stack: Stack, deployment: Deployment, timeout: float) -> bool:
         print(f"--- sandbox-{agent_id} ---\n{stack.logs(f'sandbox-{agent_id}')}")
     print(f"--- vessel ---\n{stack.logs('vessel')}")
     return False
+
+
+def _scrub(text: str) -> str:
+    # Some providers echo part of the key in an error; never print anything shaped like one.
+    return re.sub(r"\b(sk|Bearer)[-_ ]?[A-Za-z0-9*._-]{6,}|[A-Za-z0-9*_-]{24,}", "[redacted]", text)
 
 
 def check_models(stack: Stack, deployment: Deployment) -> bool:
@@ -346,7 +378,7 @@ def check_models(stack: Stack, deployment: Deployment) -> bool:
             print(f"PASS  model {line['model']} answers through the egress")
         else:
             ok = False
-            print(f"FAIL  model {line['model']}: HTTP {line['code']} {line['detail']}".rstrip())
+            print(f"FAIL  model {line['model']}: HTTP {line['code']} {_scrub(line['detail'])}".rstrip())
     return ok and seen == len(models)
 
 
@@ -360,8 +392,7 @@ def up(args: argparse.Namespace) -> None:
     elif args.example or args.agent or args.model_url or args.api_key or args.model or args.mount:
         raise SystemExit(f"{stack.deployment} exists; edit it instead of passing setup options")
     deployment, _ = write_compose(stack)
-    if missing := _missing_env(deployment):
-        raise SystemExit(f"set {', '.join(missing)} in the environment or {stack.env_file}")
+    _require_env(stack, deployment)
     stack.compose("up", "-d", "--build", "--remove-orphans")
     if not wait_ready(stack, deployment, args.timeout):
         raise SystemExit("the deployment is running but not ready; fix the problem above and run astralvessel up")
@@ -381,6 +412,7 @@ def check(args: argparse.Namespace) -> None:
     stack.load_env()
     os.environ.pop("VESSEL_JWKS_DIR", None)
     deployment = load_deployment(stack.deployment)
+    _require_env(stack, deployment)
     report = run_probes(stack, deployment, os.environ.get("VESSEL_SANDBOX_TOKEN", ""))
     print(f"{report.passed} passed, {len(report.failed)} failed, {report.skipped} skipped")
     if report.failed:
@@ -390,6 +422,9 @@ def check(args: argparse.Namespace) -> None:
 def down(args: argparse.Namespace) -> None:
     stack = Stack.at(args.deployment or "deployment.toml")
     stack.require_compose()
+    stack.load_env()
+    os.environ.pop("VESSEL_JWKS_DIR", None)
+    _require_env(stack, load_deployment(stack.deployment))
     stack.compose("down", *(["-v"] if args.volumes else []))
 
 
@@ -402,6 +437,7 @@ def client(args: argparse.Namespace, mode: str) -> None:
     if not os.environ.get("VESSEL_APP_KEY"):
         raise SystemExit(f"set VESSEL_APP_KEY in the environment or {stack.env_file}")
     deployment = load_deployment(stack.deployment)
+    _require_env(stack, deployment)
     if args.agent not in deployment.agents:
         raise SystemExit(f"no agent {args.agent}; this deployment has {', '.join(deployment.agents)}")
     image = stack.container_image("vessel")
@@ -411,7 +447,8 @@ def client(args: argparse.Namespace, mode: str) -> None:
     command = ["docker", "run", "--rm", "-i", *(["-t"] if tty else []),
                "--network", f"{deployment.vessel.project}_front", "--user", f"{os.getuid()}:{os.getgid()}",
                "--read-only", "--tmpfs", "/tmp", "--cap-drop", "ALL", "--security-opt", "no-new-privileges:true",
-               "--pids-limit", "64", "-e", "VESSEL_APP_KEY", "-e", "HOME=/tmp", "-v", f"{chats}:/chats",
+               "--pids-limit", "64", "--memory", "512m", "-e", "VESSEL_APP_KEY", "-e", "HOME=/tmp",
+               "-v", f"{chats}:/chats",
                image, "astralvessel", "client", mode, args.agent]
     if mode == "ask":
         command.append(args.question)

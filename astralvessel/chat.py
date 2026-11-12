@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import os
 import sys
 import time
@@ -47,30 +48,34 @@ async def turn(client: VesselClient, agent: str, text: str, files: Path, shown: 
     events: list[dict[str, Any]] = []
     streamed = False
     task_id = ""
+    stream = client.stream(agent, OWNER, text, history=history, conversation_id=conversation_id)
     try:
-        async for event in client.stream(agent, OWNER, text, history=history, conversation_id=conversation_id):
-            events.append(event)
-            kind = event["type"]
-            if kind == "task":
-                task_id = event.get("task_id") or ""
-            elif kind == "text.delta":
-                streamed = True
-                _say(event.get("content", ""))
-            elif kind == "tool.started":
-                _say(f"\n[{event.get('name')}]\n")
-            elif kind == "file":
-                saved = _save(files, event)
-                _say(f"\n[saved {shown / saved.relative_to(files.parent)}]\n")
-            elif kind == "answer":
-                if not streamed and event.get("text"):
-                    _say(event["text"])
-                if event.get("components"):
-                    _say(f"\n[{len(event['components'])} interface components]")
-            elif kind == "turn.finished":
-                status = event.get("status")
-                _say("\n" if status == "ok" else f"\n[{status}]\n")
-            elif kind == "error":
-                _say(f"\n[error: {event.get('detail') or event.get('status')}]\n")
+        # aclosing ends the HTTP stream at once on a cancel, so the vessel sees the caller leave even before
+        # the task id has arrived.
+        async with contextlib.aclosing(stream):
+            async for event in stream:
+                events.append(event)
+                kind = event["type"]
+                if kind == "task":
+                    task_id = event.get("task_id") or ""
+                elif kind == "text.delta":
+                    streamed = True
+                    _say(event.get("content", ""))
+                elif kind == "tool.started":
+                    _say(f"\n[{event.get('name')}]\n")
+                elif kind == "file":
+                    saved = _save(files, event)
+                    _say(f"\n[saved {shown / saved.relative_to(files.parent)}]\n")
+                elif kind == "answer":
+                    if not streamed and event.get("text"):
+                        _say(event["text"])
+                    if event.get("components"):
+                        _say(f"\n[{len(event['components'])} interface components]")
+                elif kind == "turn.finished":
+                    status = event.get("status")
+                    _say("\n" if status == "ok" else f"\n[{status}]\n")
+                elif kind == "error":
+                    _say(f"\n[error: {event.get('detail') or event.get('status')}]\n")
     except asyncio.CancelledError:
         # Ctrl-C while an answer streams: stop the turn on the vessel too, then carry on.
         current = asyncio.current_task()
@@ -133,7 +138,11 @@ def chat(agent: str, chats: Path, resume: str | None, list_only: bool) -> int:
         if text in ("/exit", "/quit"):
             break
         if text:
-            asyncio.run(_chat_turn(store, agent, text, conversation, chats))
+            try:
+                asyncio.run(_chat_turn(store, agent, text, conversation, chats))
+            except KeyboardInterrupt:
+                # Ctrl-C outside the stream (while loading history, or a second press during the cancel).
+                print("\n[stopped]")
     print(f"saved; resume with: astralvessel chat {agent} --resume {conversation}")
     return 0
 

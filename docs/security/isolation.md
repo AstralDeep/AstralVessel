@@ -49,9 +49,11 @@ claim. `astralvessel up` runs the same probes every time it starts a deployment.
 astralvessel check
 ```
 
-It probes every agent in the deployment, with that agent's own mounts and limits, and exits non-zero if any probe
-fails. CI runs it against the example deployment on every pull request. The scripts run inside the containers
-through `docker compose exec`, with their input on stdin, so no secret appears in a process listing.
+It probes every agent in the deployment, with that agent's own mounts and limits, and exits non-zero if any probe fails.
+Run it while the deployment is idle: a probe runs real tool calls and fills a turn's disk limit, and a user's tool call
+arriving meanwhile can stop a probe part way, which shows as a failure. CI runs it against the example deployment on
+every pull request. The scripts run inside the containers through `docker compose exec`, with their input on stdin, so
+no secret appears in a process listing.
 
 | Area | Probes |
 |---|---|
@@ -64,6 +66,6 @@ through `docker compose exec`, with their input on stdin, so no secret appears i
 | Egress proxy | refuses the cloud metadata address, private addresses and shared (Tailscale) addresses; refuses odd ports; allows a public site on 443 |
 | Search and model gate | search has no direct route to the internet; cannot reach the vessel's API; cannot use the model passthrough; the vessel passes the egress with its token |
 
-A deployment with one agent, search and one data mount runs 42 probes. Each further agent adds about 30, and adds a
+A deployment with one agent, search and one data mount runs 43 probes. Each further agent adds about 30, and adds a
 reachability probe to every other sandbox. The disk limit probe is skipped, and says so, when `turn_disk` is too
 close to `scratch` to overfill one without filling the other.
