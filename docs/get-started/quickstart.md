@@ -1,157 +1,114 @@
 # Quickstart
 
-This page takes you from a fresh checkout to a running deployment of the two example agents, a passing isolation
-check, and a first streamed answer. It takes about ten minutes, most of it building images.
+Four commands take you from nothing to a checked deployment of the example agent and a first answer. Most of the
+time goes to pulling the images.
 
 ## Before you start
 
-You need a Linux host with kernel 6.12 or newer (Landlock ABI 6), Docker with Compose, Python 3.11 or newer, git,
-and an OpenAI-compatible model endpoint with an API key.
+You need a Linux host with kernel 6.12 or newer (Landlock ABI 6), Docker with Compose, and an OpenAI-compatible
+model endpoint with an API key.
 
-!!! note "Installing from PyPI"
-    `pip install astralvessel` installs the command, and its deployments pull the released images from GHCR (see
-    [Upgrading and releases](../run/upgrading.md)). This quickstart uses a checkout instead, because the example
-    deployment lives in the repository; a checkout builds the images locally.
+## 1. Install
 
-## 1. Install the command
+=== "uv"
 
-```bash
-git clone https://github.com/AstralDeep/AstralVessel.git
-cd AstralVessel
-uv venv -p 3.11 && uv pip install -e .
-source .venv/bin/activate
-astralvessel --help
-```
+    ```bash
+    uv tool install astralvessel
+    ```
 
-Without uv, `python3 -m venv .venv && .venv/bin/pip install -e .` does the same.
+    uv fetches a suitable Python if the host lacks one, and puts `astralvessel` on your `PATH`.
 
-## 2. Fill in the secrets
+=== "pipx"
 
-The example deployment lives in `deploy/`. Create `deploy/.env` with five values: your model endpoint and key, an app
-key and its SHA-256, and a master secret for the sandboxes.
+    ```bash
+    pipx install astralvessel
+    ```
 
-```bash
-cd deploy
-python3 - > .env <<'PY'
-import hashlib, secrets
-app = secrets.token_urlsafe(32)
-print("VESSEL_UPSTREAM_MODEL_URL=https://api.example.com/v1")
-print("VESSEL_UPSTREAM_MODEL_KEY=replace-with-your-model-key")
-print(f"VESSEL_APP_KEY={app}")
-print(f"VESSEL_APP_KEY_SHA256={hashlib.sha256(app.encode()).hexdigest()}")
-print(f"VESSEL_SANDBOX_TOKEN={secrets.token_urlsafe(32)}")
-PY
-chmod 600 .env
-```
+    Needs Python 3.11 or newer.
 
-Then replace the example URL with your provider's OpenAI-compatible base URL (including the `/v1` path) and
-`replace-with-your-model-key` with your real key. `deploy/.env` is ignored by git.
+## 2. Start it
 
-| Variable | Used by | What it is |
-|---|---|---|
-| `VESSEL_UPSTREAM_MODEL_URL` | egress | Your model endpoint's base URL. |
-| `VESSEL_UPSTREAM_MODEL_KEY` | egress | Your model provider's API key. Only the egress container receives it. |
-| `VESSEL_APP_KEY` | your application | The key the example app sends as `Authorization: Bearer`. The vessel never sees it. |
-| `VESSEL_APP_KEY_SHA256` | vessel | The hex SHA-256 of the app key, which the vessel compares against. |
-| `VESSEL_SANDBOX_TOKEN` | `astralvessel deploy`, vessel | A master secret of 16 or more characters. Each sandbox gets its own token derived from it. |
-
-## 3. Point it at your model
-
-`deploy/deployment.toml` reads the endpoint and key from the environment:
-
-```toml
-[egress]
-upstream_url = "env:VESSEL_UPSTREAM_MODEL_URL"
-upstream_key = "env:VESSEL_UPSTREAM_MODEL_KEY"
-```
-
-`upstream_url` is required; there is no default provider. You can also write the URL into the file directly.
-Both example agents name a model in `examples/*/vessel.toml`; set `model` in each to a model your endpoint serves:
-
-```toml
-[model]
-model = "your-model-name"
-```
-
-## 4. Generate and start the deployment
+Make an empty folder for the deployment and run `up` there:
 
 ```bash
-astralvessel deploy deployment.toml
-docker compose -f compose.generated.yml --env-file .env up -d --build
+mkdir field-guide && cd field-guide
+astralvessel up --example
 ```
 
-`deploy` writes `compose.generated.yml`, plus a `.generated/` folder of per-container secrets beside it, and prints
-each agent's sandbox profile fingerprint. Both are ignored by git.
+`up` finds no `deployment.toml`, so it asks three questions:
 
-The vessel serves an agent only after its sandbox reports that it is confined and running the deployed profile.
-Wait for both agents:
+```text
+Model endpoint (OpenAI-compatible base URL, such as https://api.example.com/v1):
+API key (or env:NAME to read it from the environment; input is hidden):
+Model name:
+```
+
+Type `env:NAME` instead of the key to keep it out of every file. The variable must then be set whenever you run
+`up`, `check`, `chat`, `ask` or `down`. Without `--example`, `up` also asks for your agent folders and for any data
+folder each one mounts.
+
+Then it:
+
+1. writes `deployment.toml`, a private `.env` (mode 600) with the key and generated secrets, and a `.gitignore`;
+2. copies the example agent into `agents/` and its sample data into `data/`;
+3. writes the Compose file and starts the containers;
+4. waits for every agent's sandbox to report that it is confined and running the deployed profile;
+5. runs the [isolation probes](../security/isolation.md) against every agent;
+6. sends one short request to your model through the egress.
+
+It reports success only if every step passes:
+
+```text
+PASS  sandbox-field-guide: has no route to the internet
+...
+PASS  model your-model-name answers through the egress
+42 probes passed, 0 failed, 0 skipped
+
+ready: field-guide
+  astralvessel chat field-guide
+  astralvessel ask field-guide "your question"
+```
+
+A wrong key fails the model check, and a sandbox that never becomes ready fails with its logs. The containers keep
+running either way, so you can look. Fix the problem and run `astralvessel up` again.
+
+## 3. Chat
 
 ```bash
-docker compose -f compose.generated.yml --env-file .env logs vessel | grep 'sandbox is ready'
+astralvessel chat field-guide
 ```
 
-You should see one line for `field-guide` and one for `field-guide-reader`.
-
-## 5. Check the isolation
+Answers stream as they are written, tool calls show as `[name]`, and files a tool returns are saved under `chats/`.
+Ctrl-C stops an answer; `/exit` or Ctrl-D leaves. Each chat is saved in `chats/chats.sqlite`:
 
 ```bash
-./verify-isolation.sh
+astralvessel chat field-guide --list
+astralvessel chat field-guide --resume 3f9c...
 ```
 
-It runs 43 probes from inside the containers and ends with `43 passed, 0 failed`. Every probe is
-listed in [Isolation and probes](../security/isolation.md). The script targets the example deployment's agent ids.
+Saving chats is the client's job, not the vessel's: the vessel keeps no conversation history. `chat` is one
+application of the [history store](../reference/python.md). Your application can use it the same way, or keep
+history its own way.
 
-## 6. Ask a question
-
-The vessel listens only on its internal `front` network and publishes no ports, so run the client from a container
-attached to that network. The image built in step 4 already has the client installed.
+## 4. Ask once
 
 ```bash
-set -a; . ./.env; set +a
-docker run --rm -i --network astralvessel_front -e VESSEL_APP_KEY astralvessel:local python - <<'PY'
-import asyncio, os
-from astralvessel.client import VesselClient
-
-async def main():
-    client = VesselClient("http://vessel:8700", os.environ["VESSEL_APP_KEY"])
-    async for event in client.stream("field-guide", "alice", "Which birds in the guide hunt fish?"):
-        if event["type"] == "tool.started":
-            print(f"\n[{event['name']}]")
-        elif event["type"] == "answer":
-            print("\n" + event["text"])
-        elif event["type"] == "turn.finished":
-            print(f"\n{event['status']}, {event['steps']} steps")
-    await client.close()
-
-asyncio.run(main())
-PY
+astralvessel ask field-guide "Which birds in the guide hunt fish?"
 ```
 
-Containers on the `front` network reach the vessel by its service name, `vessel`. `alice` is the user ID your
-application sends with each turn. The script prints the finished answer; the text also arrives word by word as
-`text.delta` events.
-
-## 7. Run the conformance checks (optional)
-
-The conformance suite drives an agent over its public interfaces with real model calls, 20 checks per agent:
-
-```bash
-for agent in field-guide field-guide-reader; do
-  docker run --rm --network astralvessel_front -v "$PWD/../conformance:/conformance:ro" astralvessel:local \
-    python /conformance/run.py http://vessel:8700 "$VESSEL_APP_KEY" $agent
-done
-```
+One turn, no history. It exits non-zero unless the turn finishes `ok`.
 
 ## Stop it
 
 ```bash
-docker compose -f compose.generated.yml --env-file .env down
+astralvessel down
 ```
 
-Add `-v` to also delete the vessel's task store volume.
+Add `--volumes` to also delete the vessel's task store. `astralvessel up` starts it again with the same settings.
 
 ## Next steps
 
 - [How it works](how-it-works.md): the containers and the path of one turn.
-- [The agent folder](../build/agent-folder.md): write your own agent.
+- [The agent folder](../build/agent-folder.md): write your own agent, then run `astralvessel up` in a new folder.
 - [Connecting an application](../run/applications.md): call agents from your own service.
+- [Manual deployment](../run/manual-deployment.md): each step `up` runs, done by hand.

@@ -39,8 +39,7 @@ AstralVessel replaces the borrowed assistant and the scaffolding with one compon
 - **Lighter.** It is a Python package and a few containers. It has no coding-assistant features to
   switch off and no private API that shifts between releases.
 - **Open.** Every interface is a published standard: A2A for conversations, the OpenAI-compatible API
-  for models, and AstralPrimitives for rich output. A conformance suite checks any agent server that
-  claims to follow this spec, and the code is under Apache 2.0 like the rest of Astral.
+  for models, and AstralPrimitives for rich output. The code is under Apache 2.0 like the rest of Astral.
 - **Astral-ready.** It speaks the same protocols as AstralDeep, so AstralDeep can call an AstralVessel
   agent the way it calls any external A2A agent, and an agent built for AstralVessel could move into
   Astral without being rewritten.
@@ -210,44 +209,27 @@ an `<img>` or a download, never inline.
 | `egress/` | The egress container: model passthrough that holds the key, and the guarded web proxy |
 | `examples/field-guide/` | An example agent over a small sample field guide, with a declared command tool |
 | `examples/field-guide-reader/` | A second, read-only example agent over the same data, with no shell or web access |
-| `deploy/` | The example `deployment.toml`, `.env.example`, and `verify-isolation.sh` |
-| `conformance/run.py` | Conformance checks: what any agent server claiming to follow the spec must pass |
+| `deploy/` | The example `deployment.toml` and `.env.example`, for a manual deployment of both example agents |
 | `stress/load.py` | A load test: many concurrent users, long histories, cancellations and flooding tool output |
 | `tests/` | Unit and service tests with a scripted model |
 
-## Install
+## Quickstart
 
 ```bash
-pip install astralvessel                 # or: uv tool install astralvessel
-astralvessel deploy deployment.toml      # writes compose.generated.yml for your deployment file
+uv tool install astralvessel              # or: pipx install astralvessel
+mkdir field-guide && cd field-guide
+astralvessel up --example                 # asks for your model URL, key and model; starts and checks it
+astralvessel chat field-guide             # saves chats in chats/ and can resume them
+astralvessel ask field-guide "Which birds hunt fish?"
 ```
 
-An installed copy deploys the images released with it, `ghcr.io/astraldeep/astralvessel` and
-`ghcr.io/astraldeep/astralvessel-egress` (amd64 and arm64); a checkout builds them from source. Both
-need Docker with Compose.
-
-## Run the example
-
-```bash
-cp deploy/.env.example deploy/.env      # fill in the model endpoint and key, app key and its sha256, sandbox token
-cd deploy
-astralvessel deploy deployment.toml      # (installed as in Develop) writes compose.generated.yml and sandbox tokens
-docker compose -f compose.generated.yml --env-file .env up -d --build
-./verify-isolation.sh                    # 43 isolation probes from inside the containers
-set -a; . ./.env; set +a
-for agent in field-guide field-guide-reader; do
-  docker run --rm --network astralvessel_front -v "$PWD/../conformance:/conformance:ro" astralvessel:local \
-    python /conformance/run.py http://vessel:8700 "$VESSEL_APP_KEY" $agent
-done                                     # 20 conformance checks per agent
-```
+`up` writes `deployment.toml` and a private `.env`, starts the containers, waits until every sandbox
+reports it is confined, runs the isolation probes against every agent, and tests the model key. An
+installed copy runs the images released with it, `ghcr.io/astraldeep/astralvessel` and
+`ghcr.io/astraldeep/astralvessel-egress` (amd64 and arm64); a checkout builds them from source.
 
 Sandboxes need a Linux kernel with Landlock ABI 6 or newer (6.12+); without it they refuse to start.
-
-To run a second deployment on the same host, give it its own `project` and front network in `[vessel]`
-(for example `project = "second"`, `front_subnet = "172.31.248.0/24"`, `front_address = "172.31.248.10"`).
-Keep each deployment in its own folder, since its generated secrets sit beside its Compose file. The
-project name prefixes its containers, networks, volumes and locally built images; the conformance run
-above then uses `--network <project>_front`; the vessel is still `http://vessel:8700` there.
+To do each step yourself, see [Manual deployment](https://astraldeep.github.io/AstralVessel/run/manual-deployment/).
 
 ## Develop
 
@@ -272,10 +254,7 @@ its own process, unconfined. That mode is for tests only: never point a model at
   application that uses it. An application's own agents live in that application's repo.
 - Never commit secrets, `.env` files, or generated Compose output (`deploy/compose.generated.yml`,
   `deploy/.generated/`).
-- CI also starts the example deployment and runs `verify-isolation.sh` against it. The conformance
-  checks need a real model, so a change to the agent loop, the A2A interface, the sandbox or the
-  web tools also needs them run by hand (the steps in "Run the example"), all passing. Say in the
-  pull request that they passed.
+- CI also starts the example deployment and runs `astralvessel check` against it.
 - Releases: bump `version` (X.Y.Z) in `pyproject.toml` on `main`, run the Release workflow by hand
   as a dry run, then push the tag `v<version>` on `main`. It publishes the images, waits for a
   maintainer's approval of the `pypi` environment, checks the images are public, then publishes the
@@ -300,8 +279,7 @@ Version 0.5.0, November 2026, the first release: `pip install astralvessel` and 
 - fetched web content fenced and labeled as untrusted before the model reads it
 - web search through a private SearXNG container, with failures reported as errors
 - a task store that survives restarts, owner binding, cancellation, and AstralPrimitives output
-- unit and service tests, isolation probes, conformance checks, a load test, and an independent
-  security review
+- unit and service tests, isolation probes, a load test, and an independent security review
 - CI on every pull request: lint, tests, image builds, and isolation probes on a running deployment
 - releases from a version tag: multi-architecture images and the PyPI package
 

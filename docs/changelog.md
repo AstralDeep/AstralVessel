@@ -5,6 +5,16 @@ version numbers follow the milestones in that history and were never published.
 
 ## Unreleased
 
+- **Four-command setup.** `astralvessel up` writes `deployment.toml` and a private `.env` when there is none (asking
+  for agent folders, model URL, key and model, or taking them as options; `env:NAME` keeps the key out of every
+  file), starts the deployment, waits until every sandbox is confined, runs the isolation probes and tests the
+  model. `--example` sets up the example agent, which now ships in the package.
+- `astralvessel check` runs the isolation probes against every agent of any deployment; they ship in the package
+  and replace `deploy/verify-isolation.sh`.
+- `astralvessel chat` (saved, resumable chats through the history store) and `astralvessel ask` (one turn), run in
+  a short-lived container on the internal `front` network; `astralvessel down` stops a deployment.
+- An optional `model` per agent in `deployment.toml`, overriding the agent folder's.
+- **The conformance suite is removed.** Its checks that the tests did not already make are now in the test suite.
 - `tool_error` is no longer a turn status; it was reserved and never produced. A failed tool call never ends a
   turn.
 - `turn.finished` is documented as always carrying `files`, `[]` when none, with a regression test.

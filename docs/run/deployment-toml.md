@@ -71,6 +71,7 @@ See [Models and egress](models-and-egress.md).
 | `id` | Lowercase letters, digits and hyphens, starting with a letter. The agent's address is `/agents/<id>`. |
 | `package` | The agent folder. |
 | `prompt_append` | Extra briefing files from the folder, appended after `prompt.md`. See [Prompts](../build/prompts.md). |
+| `model` | The model this agent uses, overriding the `model` its `vessel.toml` names. `astralvessel up` writes it. |
 | `sandbox` | The sandbox profile. |
 | `services` | Service grants, one per service the agent's tools name. See [Service tools](../build/service-tools.md). |
 

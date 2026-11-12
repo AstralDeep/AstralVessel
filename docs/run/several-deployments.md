@@ -31,13 +31,10 @@ front_address = "172.31.248.10"
 
 Applications attach to `second_front` and call `http://vessel:8700`. An application attached to more than one
 deployment's `front` network should use the container name instead, such as `http://second-vessel-1:8700`, because
-`vessel` would match both. The conformance run from the
-[Quickstart](../get-started/quickstart.md) becomes:
+`vessel` would match both. `astralvessel chat` and `ask` attach to the right network themselves.
 
-```bash
-docker run --rm --network second_front -v "$PWD/../conformance:/conformance:ro" second:local \
-  python /conformance/run.py http://vessel:8700 "$VESSEL_APP_KEY" field-guide
-```
+`astralvessel up` picks a free project name and front subnet when it writes a deployment, so deployments it creates
+in separate folders never collide.
 
 Docker volumes named with `volume:NAME` mount sources are external and not prefixed, so two deployments can mount
 the same data volume read-only.

@@ -42,33 +42,28 @@ check where an opened file or folder really points, so links cannot lead them ou
 
 ## Run the probes
 
-`deploy/verify-isolation.sh` probes a running deployment from inside its containers and prints `PASS` or `FAIL` for
-each claim. Run it from the deployment folder after `docker compose ... up -d`:
+`astralvessel check` probes a running deployment from inside its containers and prints `PASS` or `FAIL` for each
+claim. `astralvessel up` runs the same probes every time it starts a deployment.
 
 ```bash
-./verify-isolation.sh
+astralvessel check
 ```
 
-It exits non-zero if any probe fails, and CI runs it against the example deployment on every pull request. It
-targets the example's agent ids (`field-guide`, `field-guide-reader`) and data; copy and adapt it for your own
-deployment.
+It probes every agent in the deployment, with that agent's own mounts and limits, and exits non-zero if any probe
+fails. CI runs it against the example deployment on every pull request. The scripts run inside the containers
+through `docker compose exec`, with their input on stdin, so no secret appears in a process listing.
 
 | Area | Probes |
 |---|---|
 | Sandbox network | no route to the internet; cannot resolve or reach the egress; the model host is known to the probes; cannot reach the model host directly; cannot reach the vessel's API by name or by its front address; cannot reach another agent's sandbox; cannot reach search |
-| Sandbox contents | holds no task or conversation store; holds no model or app key; holds its own token, not the master; root filesystem is read-only; scratch space is `noexec`; data is mounted read-only |
+| Sandbox contents | holds no task or conversation store; holds no model or app key; holds its own token, not the master; root filesystem is read-only; scratch space is `noexec`; every mount is read-only |
 | Tool calls | a background process does not outlive its call; a call cannot read another call's scratch; cannot list processes; cannot open TCP connections; cannot create a socket file; cannot use shared memory; cannot open UDP sockets; `glob` cannot climb out of the agent's data |
 | Workspaces | calls in one turn share its workspace; a call cannot read another turn's workspace; a turn's workspace is gone once it ends; the sandbox refuses a malformed workspace key; a turn over its disk limit is stopped and emptied |
-| Files | a file written to the outbox reaches the vessel; the outbox refuses other types, big files and links; an outbox swapped for a link exposes nothing |
+| Files | a file written to the outbox reaches the vessel (for an agent that returns no CSV: is not attached); the outbox refuses other types, big files and links; an outbox swapped for a link exposes nothing |
 | Vessel | keeps no conversation store; has no direct route to the internet; reaches the model through the egress; reaches the search service |
 | Egress proxy | refuses the cloud metadata address, private addresses and shared (Tailscale) addresses; refuses odd ports; allows a public site on 443 |
 | Search and model gate | search has no direct route to the internet; cannot reach the vessel's API; cannot use the model passthrough; the vessel passes the egress with its token |
 
-That is 43 probes.
-
-## Conformance checks
-
-`conformance/run.py` checks an agent server from outside, with real model calls: the agent card, authentication,
-event order, the transcript, history handling, refusal of a system message in history, owner-scoped `GetTask` and
-`CancelTask`, cancellation, and that no raw exception text appears in any event. See the
-[Quickstart](../get-started/quickstart.md#7-run-the-conformance-checks-optional).
+A deployment with one agent, search and one data mount runs 42 probes. Each further agent adds about 30, and adds a
+reachability probe to every other sandbox. The disk limit probe is skipped, and says so, when `turn_disk` is too
+close to `scratch` to overfill one without filling the other.

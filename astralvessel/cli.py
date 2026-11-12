@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import os
 import subprocess
+import sys
 from pathlib import Path
 
 
@@ -74,6 +75,7 @@ def main() -> None:
         return
     if args.command in ("up", "check", "down", "chat", "ask"):
         from . import operate
+        sys.stdout.reconfigure(line_buffering=True)  # keep our lines in order with docker's when logged
         if args.command in ("chat", "ask"):
             operate.client(args, args.command)
         else:
