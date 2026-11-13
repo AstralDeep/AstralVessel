@@ -19,6 +19,8 @@ All routes except `/health` need `Authorization: Bearer <token>`. Two kinds of t
 
 `POST /run` takes `agent`, `tool`, `arguments_json`, `action_json`, `ticket_json`, `workspace` and `owner`.
 
+The generated Compose file points the node at the executor with `ASTRAL_VESSEL_EXECUTOR_URL`. The node gets the operator token in `ASTRAL_VESSEL_EXECUTOR_TOKEN`, from `.generated/node-executor.env`, which `up` rewrites each time. It reads the agent tokens from `/run/secrets/executor-agents.json`, named by `ASTRAL_VESSEL_EXECUTOR_AGENT_TOKENS_FILE`. A deployment with no agents sets none of these.
+
 ## What it checks, in order
 
 1. The tool exists for that agent. Otherwise `executor.tool_unknown`.

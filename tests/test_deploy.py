@@ -111,7 +111,7 @@ def test_compose_runs_a_personal_node_and_isolates_each_sandbox(data_package, tm
     assert "${DATA_DIR:?" in sandbox["volumes"][1] and sandbox["volumes"][1].endswith(":/data:ro")
     node = spec["services"]["node"]
     assert node["image"] == "astralvessel-node:local" and "build" not in node
-    assert node["ports"] == ["127.0.0.1:8001:8001"] and node["volumes"] == ["node_data:/node-data"]
+    assert node["ports"] == ["127.0.0.1:8001:8001"] and node["volumes"][0] == "node_data:/node-data"
     assert set(node["networks"]) == {"front", "outside", "egress"} and node["cap_drop"] == ["ALL"]
     assert not any(name.startswith("tools-") for name in node["networks"])
     env = node["environment"]
@@ -119,7 +119,7 @@ def test_compose_runs_a_personal_node_and_isolates_each_sandbox(data_package, tm
     assert env["KEYCLOAK_AUTHORITY"] == "https://keycloak.test/realms/astral"
     assert env["KEYCLOAK_CLIENT_ID"] == "astral-app" and env["FF_A2A_SERVER"] == "true"
     assert "DATABASE_URL" not in env and "ASTRAL_NODE_OWNER" not in env
-    assert node["env_file"] == [".generated/node.env"]
+    assert node["env_file"] == [".generated/node.env", ".generated/node-executor.env"]
     assert not any("postgres" in str(value).lower() for value in spec["services"].values())
     executor = spec["services"]["executor"]
     assert set(executor["networks"]) == {"front", "tools-guide"} and executor["read_only"]
@@ -208,7 +208,9 @@ def test_secrets_stay_out_of_the_compose_file_and_in_private_files(data_package,
     assert f"EGRESS_TOKEN={egress_token(master)}\n" == (folder / "egress.env").read_text()
     handed = json.loads((folder / "executor-agents.json").read_text())
     assert handed == {"guide": agent_token(master, "guide")}
-    assert (folder / "executor-agents.json").stat().st_mode & 0o77 == 0
+    assert (folder / "executor-agents.json").stat().st_mode & 0o777 == 0o644 and folder.stat().st_mode & 0o77 == 0
+    assert (folder / "node-executor.env").read_text() == f"ASTRAL_VESSEL_EXECUTOR_TOKEN={executor_token(master)}\n"
+    assert (folder / "node-executor.env").stat().st_mode & 0o77 == 0
     tokens = {master, sandbox_token(master, "guide"), executor_token(master), egress_token(master),
               agent_token(master, "guide"), agent_token(master, "other")}
     assert len(tokens) == 6
@@ -219,7 +221,7 @@ def test_secrets_stay_out_of_the_compose_file_and_in_private_files(data_package,
         assert line.split("=", 1)[1] not in text
     write(deployment, out, repo_root=None, master_token=master)
     assert (folder / "node.env").read_text() == held  # the node's secrets survive a redeploy
-    assert len(written) == 6
+    assert len(written) == 7
 
 
 def test_a_gatewayless_deployment_writes_no_egress_secret(data_package, tmp_path):
@@ -374,3 +376,51 @@ def test_the_gateway_endpoint_is_checked_and_may_come_from_the_environment(packa
     path.write_text(deployment_text(package_dir, mounts="").replace('"https://models.test/v1"', '"env:MODEL_URL"'))
     egress = generate(load_deployment(path), repo_root=None)["services"]["egress"]["environment"]
     assert egress["LLM_BASE_URL"].startswith("${MODEL_URL:?")
+
+
+def test_the_node_is_told_where_the_executor_is_and_given_its_tokens(data_package, tmp_path):
+    path = tmp_path / "deployment.toml"
+    path.write_text(deployment_text(data_package))
+    node = generate(load_deployment(path), repo_root=None)["services"]["node"]
+    assert node["environment"]["ASTRAL_VESSEL_EXECUTOR_URL"] == "http://172.31.247.10:8700"
+    assert node["environment"]["ASTRAL_VESSEL_EXECUTOR_AGENT_TOKENS_FILE"] == "/run/secrets/executor-agents.json"
+    assert "ASTRAL_VESSEL_EXECUTOR_TOKEN" not in node["environment"]
+    assert node["env_file"] == [".generated/node.env", ".generated/node-executor.env"]
+    assert "./.generated/executor-agents.json:/run/secrets/executor-agents.json:ro" in node["volumes"]
+    assert "front" in node["networks"]
+
+
+def test_a_node_without_agents_is_not_pointed_at_an_executor(tmp_path):
+    path = tmp_path / "deployment.toml"
+    path.write_text(OWNER)
+    node = generate(load_deployment(path), repo_root=None)["services"]["node"]
+    assert "ASTRAL_VESSEL_EXECUTOR_URL" not in node["environment"] and node["env_file"] == [".generated/node.env"]
+    assert node["volumes"] == ["node_data:/node-data"]
+
+
+def test_the_executor_token_file_is_rewritten_on_every_deploy_but_the_node_secrets_are_kept(data_package, tmp_path):
+    path = tmp_path / "deployment.toml"
+    path.write_text(deployment_text(data_package))
+    out = tmp_path / "compose.generated.yml"
+    write(load_deployment(path), out, repo_root=None, master_token="a" * 20)
+    held = (tmp_path / ".generated" / "node.env").read_text()
+    write(load_deployment(path), out, repo_root=None, master_token="b" * 20)
+    assert (tmp_path / ".generated" / "node.env").read_text() == held
+    assert (tmp_path / ".generated" / "node-executor.env").read_text() == (
+        f"ASTRAL_VESSEL_EXECUTOR_TOKEN={executor_token('b' * 20)}\n")
+    assert json.loads((tmp_path / ".generated" / "executor-agents.json").read_text()) == {
+        "guide": agent_token("b" * 20, "guide")}
+
+
+def test_the_node_owner_must_be_the_one_the_deployment_names(data_package, tmp_path):
+    path = tmp_path / "deployment.toml"
+    path.write_text(deployment_text(data_package).replace(
+        'client_id = "astral-app"', 'client_id = "astral-app"\nsubject = "owner-1"'))
+    deployment = load_deployment(path)
+    env = generate(deployment, repo_root=None)["services"]["node"]["environment"]
+    assert env["ASTRAL_NODE_OWNER"] == deployment.owner.owner_id
+    path.write_text(deployment_text(data_package))
+    unbound = load_deployment(path)
+    unbound.node.environment["ASTRAL_NODE_OWNER"] = "oidc.0000000000000000.other"
+    with pytest.raises(SystemExit, match="ASTRAL_NODE_OWNER"):
+        generate(unbound, repo_root=None)

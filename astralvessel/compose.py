@@ -21,6 +21,7 @@ NODE_SECRETS = ("WEB_SESSION_ENC_KEY", "CREDENTIAL_ENCRYPTION_KEY", "AUDIT_HMAC_
 REGISTRY = "ghcr.io/astraldeep"
 SANDBOX_PORT = 8710
 EXECUTOR_PORT = 8700
+AGENT_TOKENS_PATH = "/run/secrets/executor-agents.json"
 HARDENED: dict[str, Any] = {
     "read_only": True,
     "cap_drop": ["ALL"],
@@ -99,7 +100,14 @@ def node_environment(deployment: Deployment) -> dict[str, str]:
         env["ASTRAL_ACCEPTED_ISSUERS"] = ",".join(i.rstrip("/") for i in owner.accepted_issuers)
     if owner.owner_id:
         env["ASTRAL_NODE_OWNER"] = owner.owner_id
-    return {**node.environment, **env}
+    merged = {**node.environment, **env}
+    if merged.get("ASTRAL_NODE_OWNER") != owner.owner_id:
+        raise SystemExit("ASTRAL_NODE_OWNER in [node.environment] must equal the owner the deployment's subject names; "
+                         "set [owner] subject instead")
+    if deployment.agents:
+        merged["ASTRAL_VESSEL_EXECUTOR_URL"] = f"http://{node.front_address}:{EXECUTOR_PORT}"
+        merged["ASTRAL_VESSEL_EXECUTOR_AGENT_TOKENS_FILE"] = AGENT_TOKENS_PATH
+    return merged
 
 
 def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any]:
@@ -126,8 +134,9 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
         "restart": HARDENED["restart"], "logging": HARDENED["logging"],
         "cap_drop": HARDENED["cap_drop"], "security_opt": HARDENED["security_opt"],
         "environment": node_environment(deployment),
-        "env_file": [".generated/node.env"],
-        "volumes": [f"node_data:{NODE_DATA}"],
+        "env_file": [".generated/node.env", *([".generated/node-executor.env"] if deployment.agents else [])],
+        "volumes": [f"node_data:{NODE_DATA}",
+                    *([f"./.generated/executor-agents.json:{AGENT_TOKENS_PATH}:ro"] if deployment.agents else [])],
         "ports": [f"{deployment.node.bind}:{deployment.node.port}:{NODE_INTERNAL_PORT}"],
         "networks": node_networks,
         "pids_limit": 2048,
@@ -205,11 +214,12 @@ def inputs_hash(deployment: Deployment) -> str:
     return hashlib.sha256(json.dumps(body, sort_keys=True).encode()).hexdigest()[:16]
 
 
-def _private_file(path: Path, text: str, *, keep: bool = False) -> None:
+def _private_file(path: Path, text: str, *, keep: bool = False, mode: int = 0o600) -> None:
     flags = os.O_WRONLY | os.O_CREAT | (os.O_EXCL if keep else os.O_TRUNC)
-    fd = os.open(path, flags, 0o600)
+    fd = os.open(path, flags, mode)
     with os.fdopen(fd, "w") as handle:
         handle.write(text)
+    path.chmod(mode)
 
 
 def write(deployment: Deployment, out: Path, *, repo_root: Path | None, master_token: str) -> list[Path]:
@@ -242,8 +252,12 @@ def write(deployment: Deployment, out: Path, *, repo_root: Path | None, master_t
     _private_file(path, f"VESSEL_EXECUTOR_TOKEN={executor_token(master_token)}\n")
     written.append(path)
     path = secrets / "executor-agents.json"
+    # The node's user reads this file through the bind mount, so it is world-readable inside the private folder.
     _private_file(path, json.dumps({agent_id: agent_token(master_token, agent_id) for agent_id in deployment.agents},
-                                   indent=2) + "\n")
+                                   indent=2) + "\n", mode=0o644)
+    written.append(path)
+    path = secrets / "node-executor.env"
+    _private_file(path, f"ASTRAL_VESSEL_EXECUTOR_TOKEN={executor_token(master_token)}\n")
     written.append(path)
     for agent_id in deployment.agents:
         path = secrets / f"sandbox-{agent_id}.env"
