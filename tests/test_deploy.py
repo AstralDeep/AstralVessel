@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 import stat
@@ -13,7 +14,7 @@ import pytest
 from astralvessel import confine
 from astralvessel.compose import generate, inputs_hash, write
 from astralvessel.deployment import egress_token, load_deployment, sandbox_token
-from astralvessel.executor import executor_token
+from astralvessel.executor import agent_token, executor_token
 from astralvessel.sandbox import LocalRunner, confinement_for
 
 landlock = pytest.mark.skipif(confine.abi_version() < confine.REQUIRED_ABI, reason="kernel lacks Landlock ABI 6")
@@ -205,8 +206,12 @@ def test_secrets_stay_out_of_the_compose_file_and_in_private_files(data_package,
     assert sandbox_token(master, "guide") in (folder / "sandbox-guide.env").read_text()
     assert f"VESSEL_EXECUTOR_TOKEN={executor_token(master)}\n" == (folder / "executor.env").read_text()
     assert f"EGRESS_TOKEN={egress_token(master)}\n" == (folder / "egress.env").read_text()
-    tokens = {master, sandbox_token(master, "guide"), executor_token(master), egress_token(master)}
-    assert len(tokens) == 4
+    handed = json.loads((folder / "executor-agents.json").read_text())
+    assert handed == {"guide": agent_token(master, "guide")}
+    assert (folder / "executor-agents.json").stat().st_mode & 0o77 == 0
+    tokens = {master, sandbox_token(master, "guide"), executor_token(master), egress_token(master),
+              agent_token(master, "guide"), agent_token(master, "other")}
+    assert len(tokens) == 6
     held = (folder / "node.env").read_text()
     names = [line.split("=")[0] for line in held.splitlines()]
     assert names == ["WEB_SESSION_ENC_KEY", "CREDENTIAL_ENCRYPTION_KEY", "AUDIT_HMAC_SECRET", "AGENT_API_KEY"]
@@ -214,7 +219,7 @@ def test_secrets_stay_out_of_the_compose_file_and_in_private_files(data_package,
         assert line.split("=", 1)[1] not in text
     write(deployment, out, repo_root=None, master_token=master)
     assert (folder / "node.env").read_text() == held  # the node's secrets survive a redeploy
-    assert len(written) == 5
+    assert len(written) == 6
 
 
 def test_a_gatewayless_deployment_writes_no_egress_secret(data_package, tmp_path):

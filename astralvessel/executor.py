@@ -58,8 +58,13 @@ def args_digest(arguments_json: str) -> str:
 
 
 def executor_token(master: str) -> str:
-    # The node's token for this executor, derived from the master secret so no two tokens in the deployment match.
-    return hmac.new(master.encode(), b"executor:run", hashlib.sha256).hexdigest()
+    # The operator's token: it lists the catalog and asks for a pairing offer, and it can run nothing.
+    return hmac.new(master.encode(), b"executor:operator", hashlib.sha256).hexdigest()
+
+
+def agent_token(master: str, agent_id: str) -> str:
+    # The token that may run and end calls for one agent. It is derived from the master secret, so no two tokens match.
+    return hmac.new(master.encode(), f"executor:agent:{agent_id}".encode(), hashlib.sha256).hexdigest()
 
 
 def catalog(deployment: Deployment) -> dict[str, dict[str, Any]]:
@@ -81,12 +86,21 @@ def catalog(deployment: Deployment) -> dict[str, dict[str, Any]]:
     return found
 
 
+def workspace_for(mesh: str, turn: str) -> str:
+    # A turn's working folder comes from the mesh and turn the ticket proves, never from the request.
+    return hashlib.sha256(f"{mesh}\0{turn}".encode()).hexdigest()[:32]
+
+
 def effect_kind(scope: str) -> str:
     return "outward_read" if scope in READ_SCOPES else "outside_effect"
 
 
 def _refusal(code: str, status: int) -> JSONResponse:
     return JSONResponse({"error": True, "code": code, "output": f"refused: {code}"}, status_code=status)
+
+
+def _unauthorized() -> JSONResponse:
+    return JSONResponse({"error": True, "output": "unauthorized"}, status_code=401)
 
 
 class Replays:
@@ -104,13 +118,19 @@ class Replays:
         return True
 
 
-def executor_app(deployment: Deployment, verifier: Verifier, runners: dict[str, RemoteRunner], token: str) -> Starlette:
+def executor_app(deployment: Deployment, verifier: Verifier, runners: dict[str, RemoteRunner], operator_token: str,
+                 agent_tokens: dict[str, str]) -> Starlette:
     tools = catalog(deployment)
     replays = Replays()
 
-    def authorized(request: Request) -> bool:
-        supplied = request.headers.get("authorization", "").removeprefix("Bearer ")
-        return hmac.compare_digest(supplied.encode(), token.encode())
+    def caller(request: Request) -> tuple[str, str | None] | None:
+        supplied = request.headers.get("authorization", "").removeprefix("Bearer ").encode()
+        found: tuple[str, str | None] | None = None
+        for role, agent_id, token in [("operator", None, operator_token),
+                                      *(("agent", a, t) for a, t in agent_tokens.items())]:
+            if hmac.compare_digest(supplied, token.encode()):
+                found = (role, agent_id)
+        return found
 
     async def health(_request: Request) -> JSONResponse:
         ready = {agent_id: ((await runner.health()) or {}).get("confined") is True
@@ -118,21 +138,26 @@ def executor_app(deployment: Deployment, verifier: Verifier, runners: dict[str, 
         return JSONResponse({"ok": True, "agents": ready, "mesh": await verifier.state()})
 
     async def listing(request: Request) -> JSONResponse:
-        if not authorized(request):
-            return JSONResponse({"error": True, "output": "unauthorized"}, status_code=401)
-        return JSONResponse({"agents": tools})
+        who = caller(request)
+        if who is None:
+            return _unauthorized()
+        return JSONResponse({"agents": tools if who[1] is None else {who[1]: tools[who[1]]}})
 
     async def pairing(request: Request) -> JSONResponse:
-        if not authorized(request):
-            return JSONResponse({"error": True, "output": "unauthorized"}, status_code=401)
+        who = caller(request)
+        if who is None:
+            return _unauthorized()
+        if who[1] is not None:
+            return _refusal("executor.token_scope", 403)
         try:
             return JSONResponse(await verifier.pairing_offer())
         except Refused as exc:
             return _refusal(exc.code, 409)
 
     async def run(request: Request) -> JSONResponse:
-        if not authorized(request):
-            return JSONResponse({"error": True, "output": "unauthorized"}, status_code=401)
+        who = caller(request)
+        if who is None:
+            return _unauthorized()
         try:
             body = await request.json()
             agent_id, name = body["agent"], body["tool"]
@@ -147,6 +172,10 @@ def executor_app(deployment: Deployment, verifier: Verifier, runners: dict[str, 
                 raise ValueError
         except (ValueError, KeyError, TypeError):
             return _refusal("request.malformed", 400)
+        if who[1] is None:
+            return _refusal("executor.token_scope", 403)
+        if who[1] != agent_id:
+            return _refusal("executor.token_agent_mismatch", 403)
         entry = next((t for t in tools.get(agent_id, {}).get("tools", []) if t["name"] == name), None)
         if entry is None:
             return _refusal("executor.tool_unknown", 404)
@@ -154,8 +183,6 @@ def executor_app(deployment: Deployment, verifier: Verifier, runners: dict[str, 
             return _refusal("request.call_mismatch", 403)
         if action.get("tool_def") != entry["definition"]:
             return _refusal("gate.tool_def_changed", 403)
-        if deployment.owner.owner_id not in (None, owner):
-            return _refusal("executor.owner_mismatch", 403)
         try:
             verified = await verifier.verify(ticket_json, action_json, effect_kind(entry["scope"]))
         except Refused as exc:
@@ -165,17 +192,27 @@ def executor_app(deployment: Deployment, verifier: Verifier, runners: dict[str, 
             return _refusal("ticket.unauthorized", 403)
         if verified.mesh != await verifier.mesh_id():
             return _refusal("ticket.wrong_mesh", 403)
+        bound_owner = deployment.owner.owner_id
+        if bound_owner is None:
+            return _refusal("executor.owner_unbound", 403)
+        bound_workspace = workspace_for(verified.mesh, verified.turn)
+        if verified.agents and verified.agents[-1] != action.get("agent"):
+            return _refusal("ticket.unauthorized", 403)
+        if owner not in ("", bound_owner) or workspace not in (None, bound_workspace):
+            return _refusal("request.call_mismatch", 403)
         if not replays.first_use(verified.action_digest):
             return _refusal("ticket.replayed", 403)
-        output, error = await runners[agent_id].run(name, arguments, workspace, owner=owner)
+        output, error = await runners[agent_id].run(name, arguments, bound_workspace, owner=bound_owner)
         limit = deployment.agents[agent_id].package.manifest.sandbox.tool_output_chars
-        files = [f.wire() for f in runners[agent_id].take_files(workspace)] if workspace else []
+        files = [f.wire() for f in runners[agent_id].take_files(bound_workspace)]
         return JSONResponse({"output": clip(output, limit)[0], "error": error, "files": files,
+                             "workspace": bound_workspace,
                              "ticket": {"mesh": verified.mesh, "device": verified.device, "turn": verified.turn}})
 
     async def end(request: Request) -> JSONResponse:
-        if not authorized(request):
-            return JSONResponse({"error": True, "output": "unauthorized"}, status_code=401)
+        who = caller(request)
+        if who is None:
+            return _unauthorized()
         try:
             body = await request.json()
             agent_id, workspace = body["agent"], body["workspace"]
@@ -183,6 +220,10 @@ def executor_app(deployment: Deployment, verifier: Verifier, runners: dict[str, 
                 raise ValueError
         except (ValueError, KeyError, TypeError):
             return _refusal("request.malformed", 400)
+        if who[1] is None:
+            return _refusal("executor.token_scope", 403)
+        if who[1] != agent_id:
+            return _refusal("executor.token_agent_mismatch", 403)
         await runners[agent_id].end_turn(workspace)
         return JSONResponse({"ok": True})
 
@@ -221,5 +262,6 @@ def build(deployment: Deployment | None = None) -> Starlette:
             return None
 
     verifier = KernelVerifier(Path(os.environ.get("VESSEL_EXECUTOR_DIR", "/executor")), mailbox=mailbox)
-    return executor_app(deployment, verifier, runners, os.environ["VESSEL_EXECUTOR_TOKEN"])
+    return executor_app(deployment, verifier, runners, os.environ["VESSEL_EXECUTOR_TOKEN"],
+                        {agent_id: agent_token(master, agent_id) for agent_id in deployment.agents})
 

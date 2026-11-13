@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .deployment import Deployment, egress_token, sandbox_token, size_bytes
-from .executor import executor_token
+from .executor import agent_token, executor_token
 
 NODE_DATA = "/node-data"
 NODE_INTERNAL_PORT = 8001
@@ -240,6 +240,10 @@ def write(deployment: Deployment, out: Path, *, repo_root: Path | None, master_t
         written.append(path)
     path = secrets / "executor.env"
     _private_file(path, f"VESSEL_EXECUTOR_TOKEN={executor_token(master_token)}\n")
+    written.append(path)
+    path = secrets / "executor-agents.json"
+    _private_file(path, json.dumps({agent_id: agent_token(master_token, agent_id) for agent_id in deployment.agents},
+                                   indent=2) + "\n")
     written.append(path)
     for agent_id in deployment.agents:
         path = secrets / f"sandbox-{agent_id}.env"

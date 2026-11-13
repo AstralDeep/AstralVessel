@@ -167,7 +167,7 @@ asyncio.run(main())
 '''
 
 EXECUTOR = r'''
-import hashlib, stat, urllib.error, urllib.request
+import hashlib, hmac, stat, urllib.error, urllib.request
 BASE = "http://%s:%s" % (os.environ["VESSEL_HOST"], os.environ["VESSEL_PORT"])
 def call(path, body=None, token=None):
     headers = {"Content-Type": "application/json"}
@@ -191,6 +191,9 @@ out("the executor's keys are readable only by it", not modes or all(m == 0o600 f
     "no kernel binding or node mailbox yet" if not modes else "")
 if CFG["agents"]:
     agent = CFG["agents"][0]
+    run_token = hmac.new(os.environ["VESSEL_SANDBOX_TOKEN"].encode(), ("executor:agent:" + agent).encode(),
+                         hashlib.sha256).hexdigest()
+    token = run_token
     tool = listing["agents"][agent]["tools"][0]
     arguments = "{}"
     action = {"v": 1, "mesh": "m", "device": "d", "turn": "t", "agent": "kernel", "tool": tool["name"],
@@ -205,7 +208,14 @@ if CFG["agents"]:
     out("the executor refuses a tool the agent does not offer or whose arguments differ from the action",
         status in (403, 404) and body.get("error") is True)
     status, body = call("/run", {**forged, "agent": "no-such-agent"}, token)
-    out("the executor refuses an agent it does not serve", status == 404)
+    out("the executor refuses an agent it does not serve", status in (403, 404))
+    status, body = call("/run", forged, os.environ["VESSEL_EXECUTOR_TOKEN"])
+    out("the executor's operator token cannot run a call", status == 403 and body.get("code") == "executor.token_scope")
+    if len(CFG["agents"]) > 1:
+        other = CFG["agents"][1]
+        status, body = call("/run", {**forged, "agent": other}, run_token)
+        out("the executor refuses one agent's token for another agent",
+            status == 403 and body.get("code") == "executor.token_agent_mismatch")
 '''
 
 EGRESS = r'''

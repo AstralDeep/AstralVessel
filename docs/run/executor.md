@@ -4,7 +4,10 @@ The executor runs a tool only after it has verified a ticket. It sits between th
 
 ## The interface
 
-All routes except `/health` need `Authorization: Bearer <executor token>`. The token is derived from `VESSEL_SANDBOX_TOKEN` and written to `.generated/executor.env`.
+All routes except `/health` need `Authorization: Bearer <token>`. Two kinds of token exist, both derived from `VESSEL_SANDBOX_TOKEN`.
+
+- The operator token is in `.generated/executor.env`. It lists the catalog and asks for the pairing offer. It cannot run or end a call (`executor.token_scope`).
+- Each agent has its own token, listed in `.generated/executor-agents.json`. It runs and ends calls for that agent only. It lists only that agent's tools. A call that names another agent gets `executor.token_agent_mismatch`.
 
 | Route | Does |
 |---|---|
@@ -21,13 +24,14 @@ All routes except `/health` need `Authorization: Bearer <executor token>`. The t
 1. The tool exists for that agent. Otherwise `executor.tool_unknown`.
 2. The action names the same tool and the digest of exactly these arguments. Otherwise `request.call_mismatch`.
 3. The action's `tool_def` equals the executor's own definition hash. Otherwise `gate.tool_def_changed`.
-4. When `[owner]` sets a `subject`, the request's `owner` is that owner. Otherwise `executor.owner_mismatch`.
-5. The kernel verifies the ticket offline, with the effect kind taken from the tool's scope. Otherwise a `ticket.*` or `gate.*` code.
-6. The verified mesh, device and turn equal the action's. Otherwise `ticket.unauthorized`.
-7. The ticket's mesh is the executor's own mesh. Otherwise `ticket.wrong_mesh`.
-8. This ticket has not run before. Otherwise `ticket.replayed`.
+4. The kernel verifies the ticket offline, with the effect kind taken from the tool's scope. Otherwise a `ticket.*` or `gate.*` code.
+5. The verified mesh, device and turn equal the action's, and the ticket's last agent is the action's agent. Otherwise `ticket.unauthorized`.
+6. The ticket's mesh is the executor's own mesh. Otherwise `ticket.wrong_mesh`.
+7. The deployment names its owner (`subject` in `[owner]`). Otherwise `executor.owner_unbound`.
+8. An `owner` or `workspace` in the request equals the derived one. Otherwise `request.call_mismatch`.
+9. This ticket has not run before. Otherwise `ticket.replayed`.
 
-The kernel's action has nine fixed fields and no owner or workspace, so a ticket cannot bind them. The node names them in the request and the node's token vouches for them. The agent is bound by the definition hash. It is the kernel's hash of the tool's name, description, input schema and annotations, with `{"agent": "<id>"}` added to the annotations. A tool published to the mesh with that annotation carries that hash in the ticket.
+The kernel's action has nine fixed fields and no owner or workspace, so a ticket cannot carry them. The executor never takes them from the request. The owner is the deployment's configured owner, bound to the mesh the ticket proves. The workspace is derived from the verified mesh and turn, and `/run` returns it so the node can end the turn. The agent is bound by the definition hash. It is the kernel's hash of the tool's name, description, input schema and annotations, with `{"agent": "<id>"}` added to the annotations. A tool published to the mesh with that annotation carries that hash in the ticket.
 
 Every refusal returns HTTP 403 with a dotted `code`, and nothing runs. The replay memory lives in the executor's process and holds the last 8192 tickets.
 
