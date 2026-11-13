@@ -54,12 +54,13 @@ def load_binding() -> Any:
 
 class KernelVerifier:
     def __init__(self, data_dir: Path, *, label: str = "executor", binding: Any = None,
-                 mailbox: Callable[[], Awaitable[str | None]], interval: float = 5.0):
+                 mailbox: Callable[[], Awaitable[str | None]], interval: float = 5.0, loopback: bool = False):
         self._data_dir = Path(data_dir)
         self._label = label
         self._binding = binding if binding is not None else load_binding()
         self._mailbox = mailbox
         self._interval = interval
+        self._loopback = loopback
         self._kernel: Any = None
         self._task: asyncio.Task | None = None
 
@@ -79,7 +80,8 @@ class KernelVerifier:
 
     async def _open_when_the_node_has_a_mailbox(self) -> None:
         # The mailbox exists once the node has joined the owner's mesh; the executor joins through it.
-        while True:
+        address = None
+        while not self._loopback:
             address = await self._mailbox()
             if address:
                 break
@@ -92,7 +94,7 @@ class KernelVerifier:
             wrap_secret=keys.wrap_secret, restore_marker=keys.restore_marker, device_label=self._label,
             device_kind=binding.DeviceKind.NODE, issuers=[],
             network=binding.NetworkConfig(relay=binding.RelayChoice.DISABLED(), local_discovery=False,
-                                          internet_lookup=False, loopback_only=False,
+                                          internet_lookup=False, loopback_only=self._loopback,
                                           sync_interval_ms=SYNC_INTERVAL_MS, mailbox=address))
         (self._data_dir / "kernel").mkdir(mode=0o700, parents=True, exist_ok=True)
         kernel = await asyncio.to_thread(binding.Kernel.open, config, _signer(binding, keys), None, None,

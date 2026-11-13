@@ -49,6 +49,10 @@ astralvessel pair --executor
 
 The image build fails unless the pinned kernel wheel is present and has the pinned sha256. If the binding still cannot be imported at run time, the executor refuses every ticket and every pairing offer with `executor.no_kernel`. That code is never used for a transport failure, which Deep reports as `executor.unavailable`.
 
+## Revoking access
+
+Revoking a tool's grant on the owner's device stops new tickets for it. A ticket already minted stays valid until it expires, because the executor checks it offline. A stop on the mesh cuts every outstanding ticket at once. The executor refuses it with a `ticket.*` or `gate.*` code after the stop syncs.
+
 ## Known limits
 
 - The executor syncs through the node's mailbox. It needs a route to it on `front`. It has no relay, so it reaches the mailbox only by its direct addresses.

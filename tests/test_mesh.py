@@ -145,6 +145,18 @@ async def test_the_executor_waits_for_the_nodes_mailbox_and_then_offers_pairing(
     assert not kernel.network
 
 
+async def test_a_loopback_executor_opens_at_once_without_a_mailbox_and_stays_on_loopback(tmp_path):
+    verifier = await opened(tmp_path, None, loopback=True)
+    await until(lambda: _is(verifier, "not_enrolled"))
+    [kernel] = Kernel.opened
+    assert kernel.config.network.loopback_only is True and kernel.config.network.mailbox is None
+    await verifier.stop()
+
+
+async def _is(verifier, state):
+    return await verifier.state() == state
+
+
 async def test_an_enrolled_executor_verifies_and_maps_kernel_refusals(tmp_path):
     verifier = await opened(tmp_path, "MAILBOX")
 
