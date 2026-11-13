@@ -39,12 +39,15 @@ class Verifier(Protocol):
 
     async def state(self) -> str: ...
 
+    async def mesh_id(self) -> str | None: ...
+
     async def pairing_offer(self) -> dict[str, Any]: ...
 
 
-def definition_hash(name: str, description: str, input_schema: Any, annotations: Any) -> str:
-    # The same canonical form the node hashes its own tool definitions with, so the two sides agree on a tool.
-    document = {"name": name, "description": description, "input_schema": input_schema, "annotations": annotations}
+def definition_hash(agent: str, name: str, description: str, input_schema: Any, annotations: Any) -> str:
+    # The node hashes its advertised tool definitions the same way; the agent id makes a tool's hash its own.
+    document = {"agent": agent, "name": name, "description": description, "input_schema": input_schema,
+                "annotations": annotations}
     canonical = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -71,7 +74,7 @@ def catalog(deployment: Deployment) -> dict[str, dict[str, Any]]:
             tools[tool.name] = {"description": tool.description, "input_schema": tool.parameters, "scope": tool.scope}
         for name, tool in tools.items():
             tool["name"] = name
-            tool["definition"] = definition_hash(name, tool["description"], tool["input_schema"], {})
+            tool["definition"] = definition_hash(agent_id, name, tool["description"], tool["input_schema"], {})
         found[agent_id] = {"description": agent.package.manifest.agent.description,
                            "scope": agent.package.strongest_scope(), "tools": list(tools.values())}
     return found
@@ -157,6 +160,12 @@ def executor_app(deployment: Deployment, verifier: Verifier, runners: dict[str, 
         if verified.mesh != action.get("mesh") or verified.turn != action.get("turn") \
                 or verified.device != action.get("device"):
             return _refusal("ticket.unauthorized", 403)
+        if verified.mesh != await verifier.mesh_id():
+            return _refusal("ticket.wrong_mesh", 403)
+        if not verified.agents or verified.agents[-1] != agent_id:
+            return _refusal("request.call_mismatch", 403)
+        if any(key in action and action[key] != value for key, value in (("owner", owner), ("workspace", workspace))):
+            return _refusal("request.call_mismatch", 403)
         if not replays.first_use(verified.action_digest):
             return _refusal("ticket.replayed", 403)
         output, error = await runners[agent_id].run(name, arguments, workspace, owner=owner)

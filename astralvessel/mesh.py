@@ -42,6 +42,7 @@ class Verified:
     device: str
     turn: str
     action_digest: str
+    agents: tuple[str, ...] = ()
 
 
 def load_binding() -> Any:
@@ -106,6 +107,11 @@ class KernelVerifier:
         status = await self._kernel.mesh_status()
         return "enrolled" if getattr(status.state, "name", str(status.state)) in ENROLLED else "not_enrolled"
 
+    async def mesh_id(self) -> str | None:
+        if await self.state() != "enrolled":
+            return None
+        return (await self._kernel.mesh_status()).mesh_id
+
     async def pairing_offer(self) -> dict[str, Any]:
         state = await self.state()
         if state != "not_enrolled":
@@ -124,7 +130,8 @@ class KernelVerifier:
             claims = await asyncio.to_thread(self._kernel.verify_ticket, ticket_json, action_json, effect)
         except self._binding.KernelError as exc:
             raise Refused(dotted(getattr(exc, "code", ""), "ticket")) from None
-        return Verified(claims.mesh, claims.device, claims.turn, claims.action_digest)
+        return Verified(claims.mesh, claims.device, claims.turn, claims.action_digest,
+                        tuple(getattr(claims, "agents", ()) or ()))
 
 
 def _signer(binding: Any, keys: ExecutorKeys) -> Any:

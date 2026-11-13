@@ -77,11 +77,13 @@ out("a turn's workspace is gone once it ends", not left)
 
 CALLS = r'''
 import asyncio
+from astralvessel.deployment import sandbox_token
 from astralvessel.sandbox import RemoteRunner
 A, B, C, D, E, F = CFG["keys"]
 
 async def main():
-    r = RemoteRunner("http://127.0.0.1:8710", os.environ["VESSEL_SANDBOX_TOKEN"], 30, CFG["types"])
+    r = RemoteRunner(os.environ["VESSEL_SANDBOX_URL_TEMPLATE"].format(id=CFG["agent"]),
+                     sandbox_token(os.environ["VESSEL_SANDBOX_TOKEN"], CFG["agent"]), 30, CFG["types"])
     async def run(name, args, key=None, owner=""):
         return await r.run(name, args, key, owner=owner)
 
@@ -294,8 +296,8 @@ def run_probes(stack: Stack, deployment: Deployment, master: str) -> Report:
             "model_host": host, "model_port": port, "mounts": mounts,
             "others": [f"sandbox-{other}" for other in ids if other != agent_id],
             "master": hashlib.sha256(master.encode()).hexdigest()})
-        _run(stack, report, f"{agent_id} calls", service, CALLS, {
-            "keys": keys, "sleep": sleeps, "types": agent.package.manifest.output.files,
+        _run(stack, report, f"{agent_id} calls", "executor", CALLS, {
+            "agent": agent_id, "keys": keys, "sleep": sleeps, "types": agent.package.manifest.output.files,
             "turn_bytes": agent.profile.turn_bytes, "scratch_bytes": size_bytes(agent.profile.scratch)})
         _run(stack, report, service, service, SANDBOX_AFTER, {"sleep": sleeps, "ended": keys[:2]})
     _run(stack, report, "executor", "executor", EXECUTOR, {"agents": ids})

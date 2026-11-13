@@ -33,7 +33,7 @@ class FakeVerifier:
         self.calls, self.fail, self.mesh_state = [], None, "enrolled"
         self.started = self.stopped = False
         self.digest = None
-        self.who = {"mesh": "mesh-1", "device": "device-1", "turn": "turn-1"}
+        self.who = {"mesh": "mesh-1", "device": "device-1", "turn": "turn-1", "agents": ("guide",)}
 
     async def start(self):
         self.started = True
@@ -43,6 +43,9 @@ class FakeVerifier:
 
     async def state(self):
         return self.mesh_state
+
+    async def mesh_id(self):
+        return "mesh-1"
 
     async def pairing_offer(self):
         if self.mesh_state != "not_enrolled":
@@ -100,7 +103,7 @@ def test_the_catalog_lists_every_tool_with_its_scope_and_definition(stack):
     tools = {t["name"]: t for t in listing["tools"]}
     assert set(tools) == {"read", "grep", "glob", "list", "bash", "echo"}
     assert tools["bash"]["scope"] == "tools:execute" and tools["echo"]["input_schema"]["type"] == "object"
-    assert tools["read"]["definition"] == definition_hash("read", tools["read"]["description"],
+    assert tools["read"]["definition"] == definition_hash("guide", "read", tools["read"]["description"],
                                                          tools["read"]["input_schema"], {})
     assert len({t["definition"] for t in tools.values()}) == 6
     assert effect_kind("tools:read") == effect_kind("tools:search") == "outward_read"
@@ -169,7 +172,7 @@ async def test_the_action_must_match_the_call_and_the_executors_own_tool(stack, 
 async def test_the_verified_claims_must_match_the_action(stack, client):
     deployment, verifier, _ = stack
     for field in ("mesh", "device", "turn"):
-        verifier.who = {"mesh": "mesh-1", "device": "device-1", "turn": "turn-1", field: "other"}
+        verifier.who = {"mesh": "mesh-1", "device": "device-1", "turn": "turn-1", "agents": ("guide",), field: "other"}
         response = await client.post("/run", json=call(deployment), headers=AUTH)
         assert response.status_code == 403 and response.json()["code"] == "ticket.unauthorized"
 
@@ -257,3 +260,31 @@ def test_the_stopped_verifier_is_released_with_the_app(stack):
 
     asyncio.run(cycle())
     assert verifier.stopped
+
+
+async def test_a_ticket_for_another_agent_or_mesh_or_owner_is_refused(stack, client):
+    deployment, verifier, _ = stack
+    verifier.who["agents"] = ("other-agent",)
+    wrong_agent = await client.post("/run", json=call(deployment), headers=AUTH)
+    assert wrong_agent.status_code == 403 and wrong_agent.json()["code"] == "request.call_mismatch"
+    verifier.who["agents"] = ()
+    assert (await client.post("/run", json=call(deployment), headers=AUTH)).status_code == 403
+    verifier.who = {"mesh": "mesh-2", "device": "device-1", "turn": "turn-1", "agents": ("guide",)}
+    body = call(deployment)
+    body["action_json"] = json.dumps({**json.loads(body["action_json"]), "mesh": "mesh-2"})
+    wrong_mesh = await client.post("/run", json=body, headers=AUTH)
+    assert wrong_mesh.json()["code"] == "ticket.wrong_mesh"
+    verifier.who = {"mesh": "mesh-1", "device": "device-1", "turn": "turn-1", "agents": ("guide",)}
+    for field, value in (("owner", "bob"), ("workspace", "e" * 32)):
+        bound = call(deployment)
+        bound["action_json"] = json.dumps({**json.loads(bound["action_json"]), field: value})
+        refused = await client.post("/run", json=bound, headers=AUTH)
+        assert refused.json()["code"] == "request.call_mismatch"
+    good = call(deployment)
+    good["action_json"] = json.dumps({**json.loads(good["action_json"]), "owner": "alice", "workspace": KEY})
+    assert (await client.post("/run", json=good, headers=AUTH)).status_code == 200
+
+
+def test_the_definition_hash_is_unique_per_agent(stack):
+    deployment, _, _ = stack
+    assert definition_hash("a", "bash", "d", {}, {}) != definition_hash("b", "bash", "d", {}, {})

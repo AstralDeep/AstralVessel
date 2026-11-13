@@ -43,7 +43,7 @@ class Kernel:
         self.network = False
 
     async def mesh_status(self):
-        return SimpleNamespace(state=SimpleNamespace(name=self.state))
+        return SimpleNamespace(state=SimpleNamespace(name=self.state), mesh_id="m")
 
     async def create_pairing_offer(self):
         if self.error:
@@ -54,7 +54,7 @@ class Kernel:
         self.tickets.append((ticket_json, action_json, effect))
         if self.error:
             raise KernelError(self.error)
-        return SimpleNamespace(mesh="m", device="d", turn="t", action_digest="sha256:" + "9" * 64)
+        return SimpleNamespace(mesh="m", device="d", turn="t", action_digest="sha256:" + "9" * 64, agents=["a"])
 
 
 class Denied(Exception):
@@ -135,6 +135,7 @@ async def test_the_executor_waits_for_the_nodes_mailbox_and_then_offers_pairing(
     assert await verifier.pairing_offer() == {"code": "1234 5678", "payload": "PAYLOAD", "expires_ms": 77}
     with pytest.raises(mesh.Refused, match="executor.not_enrolled"):
         await verifier.verify("{}", "{}", "mesh_read")
+    assert await verifier.mesh_id() is None
     kernel.error = "mesh.pairing_closed"
     with pytest.raises(mesh.Refused, match="mesh.pairing_closed"):
         await verifier.pairing_offer()
@@ -153,10 +154,11 @@ async def test_an_enrolled_executor_verifies_and_maps_kernel_refusals(tmp_path):
     kernel.state = "ENROLLED"
     assert await verifier.state() == "enrolled"
     claims = await verifier.verify("T", "A", "outside_effect")
-    assert claims == mesh.Verified("m", "d", "t", "sha256:" + "9" * 64)
+    assert claims == mesh.Verified("m", "d", "t", "sha256:" + "9" * 64, ("a",))
     assert kernel.tickets == [("T", "A", "outside_effect")]
     with pytest.raises(mesh.Refused, match="executor.enrolled"):
         await verifier.pairing_offer()
+    assert await verifier.mesh_id() == "m"
     for raised, shown in (("ticket.expired", "ticket.expired"), ("Weird Failure", "ticket.weird_failure")):
         kernel.error = raised
         with pytest.raises(mesh.Refused) as refused:
