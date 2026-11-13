@@ -112,8 +112,8 @@ class ReplayMemoryFull(Exception):
 
 
 class Replays:
-    # A ticket pays for one effect. The kernel verifies each ticket afresh, so the executor keeps the ids it has run in a
-    # file that survives a restart. An id is kept for the retention window, which must cover the longest ticket life.
+    # A ticket pays for one effect. The kernel verifies each ticket afresh, so the executor keeps the ids it has run
+    # in a file that survives a restart. An id is kept for the retention window, which must cover a ticket's life.
     def __init__(self, path: Path, retention_s: int = RETENTION_SECONDS, limit: int = SEEN_LIMIT,
                  clock: Callable[[], float] = time.time):
         self._retention, self._limit, self._clock = retention_s, limit, clock
