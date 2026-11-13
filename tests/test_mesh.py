@@ -209,6 +209,7 @@ async def test_the_signer_signs_for_the_kernel_but_never_for_an_owners_consent(t
     der = encode_dss_signature(int.from_bytes(raw[:32], "big"), int.from_bytes(raw[32:], "big"))
     public.verify(der, message, ec.ECDSA(hashes.SHA256()))
     assert int.from_bytes(raw[32:], "big") <= keys.P256_ORDER // 2
+    assert signer.hardware_backed() is False
     assert signer.presence_public_key() != point and len(signer.presence_public_key()) == 65
     assert len(signer.presence_sign(SimpleNamespace(kind="other"), b"x")) == 64
     with pytest.raises(Denied, match="never signs an owner consent"):

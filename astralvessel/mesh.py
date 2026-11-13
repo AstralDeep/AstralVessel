@@ -146,6 +146,9 @@ def _signer(binding: Any, keys: ExecutorKeys) -> Any:
         def presence_public_key(self):
             return keys.presence_public_key()
 
+        def hardware_backed(self):
+            return False
+
         def presence_sign(self, prompt, message):
             kind = "OTHER" if prompt.kind == binding.ConsentKind.OTHER else str(prompt.kind)
             try:
