@@ -95,7 +95,8 @@ class KernelVerifier:
                                           internet_lookup=False, loopback_only=False,
                                           sync_interval_ms=SYNC_INTERVAL_MS, mailbox=address))
         (self._data_dir / "kernel").mkdir(mode=0o700, parents=True, exist_ok=True)
-        kernel = await asyncio.to_thread(binding.Kernel.open, config, _signer(binding, keys), None, None, None)
+        kernel = await asyncio.to_thread(binding.Kernel.open, config, _signer(binding, keys), None, None,
+                                        _listener(binding))
         await kernel.start_network()
         self._kernel = kernel
 
@@ -153,3 +154,11 @@ def _signer(binding: Any, keys: ExecutorKeys) -> Any:
                 raise binding.HostSignerError.Denied(str(exc)) from exc
 
     return ExecutorSigner()
+
+
+def _listener(binding: Any) -> Any:
+    class Quiet(binding.KernelListener):
+        def on_change(self, change):
+            return None
+
+    return Quiet()

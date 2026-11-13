@@ -90,7 +90,7 @@ def call(deployment, tool="bash", arguments=None, **over):
     arguments_json = json.dumps(arguments if arguments is not None else {"command": "echo ran"})
     action = {"v": 1, "mesh": "mesh-1", "device": "device-1", "turn": "turn-1", "agent": "kernel", "tool": tool,
               "tool_def": entry(deployment, tool)["definition"], "args_digest": args_digest(arguments_json),
-              "influence": []}
+              "influence": [], "owner": over.get("owner", "alice"), "workspace": over.get("workspace", KEY)}
     body = {"agent": "guide", "tool": tool, "arguments_json": arguments_json, "action_json": json.dumps(action),
             "ticket_json": json.dumps({"v": 1, "capability": "x"}), "workspace": KEY, "owner": "alice"}
     return {**body, **over}
@@ -280,9 +280,13 @@ async def test_a_ticket_for_another_agent_or_mesh_or_owner_is_refused(stack, cli
         bound["action_json"] = json.dumps({**json.loads(bound["action_json"]), field: value})
         refused = await client.post("/run", json=bound, headers=AUTH)
         assert refused.json()["code"] == "request.call_mismatch"
-    good = call(deployment)
-    good["action_json"] = json.dumps({**json.loads(good["action_json"]), "owner": "alice", "workspace": KEY})
-    assert (await client.post("/run", json=good, headers=AUTH)).status_code == 200
+    for field in ("owner", "workspace"):
+        action = json.loads(call(deployment)["action_json"])
+        del action[field]
+        missing = {**call(deployment), "action_json": json.dumps(action)}
+        refused = await client.post("/run", json=missing, headers=AUTH)
+        assert refused.status_code == 403 and refused.json()["code"] == "request.call_mismatch"
+    assert (await client.post("/run", json=call(deployment), headers=AUTH)).status_code == 200
 
 
 def test_the_definition_hash_is_unique_per_agent(stack):

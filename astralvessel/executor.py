@@ -164,7 +164,8 @@ def executor_app(deployment: Deployment, verifier: Verifier, runners: dict[str, 
             return _refusal("ticket.wrong_mesh", 403)
         if not verified.agents or verified.agents[-1] != agent_id:
             return _refusal("request.call_mismatch", 403)
-        if any(key in action and action[key] != value for key, value in (("owner", owner), ("workspace", workspace))):
+        bound = (("owner", owner), ("workspace", workspace))
+        if any(key not in action or action[key] != value for key, value in bound):
             return _refusal("request.call_mismatch", 403)
         if not replays.first_use(verified.action_digest):
             return _refusal("ticket.replayed", 403)

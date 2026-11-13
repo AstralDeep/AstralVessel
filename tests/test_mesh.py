@@ -34,6 +34,7 @@ class Kernel:
 
     @classmethod
     def open(cls, config, signer, model, tools, listener):
+        assert listener.on_change("x") is None
         return cls(config, signer)
 
     async def start_network(self):
@@ -63,7 +64,8 @@ class Denied(Exception):
 
 def binding():
     return SimpleNamespace(
-        Kernel=Kernel, KernelError=KernelError, HostSigner=object, HostSignerError=SimpleNamespace(Denied=Denied),
+        Kernel=Kernel, KernelError=KernelError, KernelListener=object,
+        HostSigner=object, HostSignerError=SimpleNamespace(Denied=Denied),
         KernelConfig=lambda **kw: SimpleNamespace(**kw), NetworkConfig=lambda **kw: SimpleNamespace(**kw),
         RelayChoice=SimpleNamespace(DISABLED=lambda: "disabled"), DeviceKind=SimpleNamespace(NODE="node"),
         ConsentKind=SimpleNamespace(OTHER="other"), new_operations_secret=lambda: os.urandom(32))
