@@ -109,11 +109,11 @@ async def test_without_a_binding_every_ticket_is_refused(tmp_path):
     verifier = mesh.KernelVerifier(tmp_path, binding=None, mailbox=Mailbox(None))
     verifier._binding = None
     await verifier.start()
-    assert await verifier.state() == "unavailable"
+    assert await verifier.state() == "no_kernel"
     for call in (verifier.verify("{}", "{}", "mesh_read"), verifier.pairing_offer()):
         with pytest.raises(mesh.Refused) as refused:
             await call
-        assert refused.value.code == "executor.unavailable"
+        assert refused.value.code == "executor.no_kernel"
     await verifier.stop()
 
 

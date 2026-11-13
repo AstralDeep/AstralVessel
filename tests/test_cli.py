@@ -41,7 +41,10 @@ def test_an_unknown_command_or_a_missing_question_is_refused(monkeypatch):
 
 
 def test_deploy_writes_compose_and_prints_the_start_command(monkeypatch, tmp_path, capsys):
-    (tmp_path / "deployment.toml").write_text(f'[owner]\nissuer = "{ISSUER}"\nclient_id = "c"\n')
+    (tmp_path / "deployment.toml").write_text(
+        f'[executor]\nkernel_artifacts = "kernel"\n[owner]\nissuer = "{ISSUER}"\nclient_id = "c"\n')
+    (tmp_path / "kernel").mkdir()
+    (tmp_path / "kernel" / "astral_kernel-0.1.0-py3-none-manylinux_2_36_aarch64.whl").write_bytes(b"w")
     (tmp_path / ".env").write_text("VESSEL_SANDBOX_TOKEN=0123456789abcdef0123\n")
     monkeypatch.delenv("VESSEL_SANDBOX_TOKEN", raising=False)
     run(monkeypatch, "deploy", str(tmp_path / "deployment.toml"))
@@ -50,7 +53,10 @@ def test_deploy_writes_compose_and_prints_the_start_command(monkeypatch, tmp_pat
 
 
 def test_deploy_can_start_it(monkeypatch, tmp_path):
-    (tmp_path / "deployment.toml").write_text(f'[owner]\nissuer = "{ISSUER}"\nclient_id = "c"\n')
+    (tmp_path / "deployment.toml").write_text(
+        f'[executor]\nkernel_artifacts = "kernel"\n[owner]\nissuer = "{ISSUER}"\nclient_id = "c"\n')
+    (tmp_path / "kernel").mkdir()
+    (tmp_path / "kernel" / "astral_kernel-0.1.0-py3-none-manylinux_2_36_aarch64.whl").write_bytes(b"w")
     monkeypatch.setenv("VESSEL_SANDBOX_TOKEN", "0123456789abcdef0123")
     ran = []
     monkeypatch.setattr(cli.subprocess, "run", lambda command, **kw: ran.append(command))

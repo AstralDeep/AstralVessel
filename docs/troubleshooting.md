@@ -28,9 +28,13 @@ The token must be current, from the issuer in `[owner]`, for the one owner the n
 
 The executor waits for the node's mailbox, which exists only after the node has joined the owner's mesh. Pair the node first.
 
-## Every call is refused with `executor.unavailable`
+## Every call is refused with `executor.no_kernel`
 
-The executor image has no kernel wheel. Rebuild it with the `kernel-artifacts` build context, or set `[executor] kernel_artifacts`.
+The kernel binding does not import in the executor's image. An image built here always has it, because the build fails without the pinned wheel. Rebuild from this checkout with `[executor] kernel_artifacts` set, or use the released image.
+
+## The image build says it needs the pinned kernel wheel
+
+The build checks the wheel's sha256 against `config/kernel-binding.json` and stops if the wheel is missing or differs. Point `[executor] kernel_artifacts` at the folder that holds `astral_kernel-<version>-py3-none-manylinux_2_36_<arch>.whl`. The binding pins only the architectures it lists.
 
 ## A call is refused with a `ticket.*` code
 

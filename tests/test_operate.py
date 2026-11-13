@@ -288,7 +288,7 @@ def test_the_executor_offer_is_printed_or_explained(tmp_path, monkeypatch, capsy
     assert "1234 5678" in printed and "PAYLOAD" in printed and seen == ["executor"]
     for code, text in (("executor.waiting_for_node", "pair the node first"),
                        ("executor.enrolled", "already in the owner's mesh"),
-                       ("executor.unavailable", "no kernel binding"), ("executor.odd", "executor.odd")):
+                       ("executor.no_kernel", "no kernel binding"), ("executor.odd", "executor.odd")):
         replies = [json.dumps({"status": 409, "code": code})]
         with pytest.raises(SystemExit, match=text):
             operate.pair(args)

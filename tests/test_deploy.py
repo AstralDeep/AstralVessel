@@ -130,7 +130,17 @@ def test_compose_runs_a_personal_node_and_isolates_each_sandbox(data_package, tm
     released = version("astralvessel")
     assert executor["image"] == f"ghcr.io/astraldeep/astralvessel:{released}" and "build" not in executor
     assert spec["services"]["egress"]["image"] == f"ghcr.io/astraldeep/astralvessel-egress:{released}"
-    built = generate(deployment, repo_root=tmp_path)["services"]
+    with pytest.raises(SystemExit, match="needs the pinned kernel wheel"):
+        generate(deployment, repo_root=tmp_path)
+    artifacts = tmp_path / "kernel-artifacts"
+    artifacts.mkdir()
+    path.write_text(deployment_text(data_package, head='[executor]\nkernel_artifacts = "kernel-artifacts"\n'))
+    with pytest.raises(SystemExit, match="holds no astral_kernel wheel"):
+        generate(load_deployment(path), repo_root=tmp_path)
+    (artifacts / "astral_kernel-0.1.0-py3-none-manylinux_2_36_aarch64.whl").write_bytes(b"w")
+    built = generate(load_deployment(path), repo_root=tmp_path)["services"]
+    assert built["executor"]["build"]["additional_contexts"] == {"kernel-artifacts": str(artifacts)}
+    assert built["sandbox-guide"]["build"]["additional_contexts"] == {"kernel-artifacts": str(artifacts)}
     assert built["executor"]["image"] == "astralvessel:local"
     assert built["executor"]["build"]["context"] == str(tmp_path)
     assert built["egress"]["build"]["context"] == str(tmp_path / "egress")
@@ -332,9 +342,12 @@ def test_two_deployments_on_one_host_can_differ_in_project_subnet_and_port(packa
 def test_a_second_project_keeps_its_own_images_and_folder(package_dir, tmp_path):
     path = tmp_path / "deployment.toml"
     second = '[node]\nproject = "second"\nfront_subnet = "172.31.248.0/24"\nfront_address = "172.31.248.10"\n'
-    path.write_text(second + deployment_text(package_dir, mounts=""))
+    kernel = '[executor]\nkernel_artifacts = "kernel"\n'
+    path.write_text(second + kernel + deployment_text(package_dir, mounts=""))
     repo = tmp_path / "repo"
     (repo / "egress").mkdir(parents=True)
+    (tmp_path / "kernel").mkdir()
+    (tmp_path / "kernel" / "astral_kernel-0.1.0-py3-none-manylinux_2_36_aarch64.whl").write_bytes(b"w")
     services = generate(load_deployment(path), repo_root=repo)["services"]
     assert {services[s]["image"] for s in ("executor", "egress", "sandbox-guide")} == {
         "second:local", "second-egress:local"}

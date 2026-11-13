@@ -60,9 +60,17 @@ def _image(repo_root: Path | None, name: str = "astralvessel", project: str = "a
     return {"image": f"{local}:local", "build": build}
 
 
-def _artifacts(deployment: Deployment) -> dict[str, str]:
+def _artifacts(deployment: Deployment, repo_root: Path | None) -> dict[str, str]:
+    if repo_root is None:
+        return {}
     folder = deployment.executor.kernel_artifacts
-    return {"kernel-artifacts": str((deployment.path.parent / folder).resolve())} if folder else {}
+    if not folder:
+        raise SystemExit("building the executor image needs the pinned kernel wheel: set [executor] kernel_artifacts "
+                         "in the deployment file to the folder that holds it")
+    path = (deployment.path.parent / folder).resolve()
+    if not any(path.glob("astral_kernel-*.whl")):
+        raise SystemExit(f"[executor] kernel_artifacts names {path}, which holds no astral_kernel wheel")
+    return {"kernel-artifacts": str(path)}
 
 
 def published(name: str) -> str:
@@ -141,7 +149,7 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
                      "build": {"context": str(agent.host_package), "dockerfile": dockerfile,
                                "additional_contexts": {"astralvessel": base}}}
         else:
-            image = _image(repo_root, project=project, contexts=_artifacts(deployment))
+            image = _image(repo_root, project=project, contexts=_artifacts(deployment, repo_root))
         services[f"sandbox-{agent_id}"] = {
             **HARDENED, **image,
             "command": ["astralvessel", "sandbox"],
@@ -164,7 +172,7 @@ def generate(deployment: Deployment, *, repo_root: Path | None) -> dict[str, Any
         executor_networks[f"tools-{agent_id}"] = {}
         executor_volumes.append(f"{agent.host_package}:/agents/{agent_id}:ro")
     services["executor"] = {
-        **HARDENED, **_image(repo_root, project=project, contexts=_artifacts(deployment)),
+        **HARDENED, **_image(repo_root, project=project, contexts=_artifacts(deployment, repo_root)),
         "command": ["astralvessel", "executor"],
         "environment": {
             "VESSEL_DEPLOYMENT": "/deploy/deployment.toml", "VESSEL_PACKAGES_ROOT": "/agents",

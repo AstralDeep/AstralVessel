@@ -449,7 +449,7 @@ except urllib.error.HTTPError as exc:
 '''
 WAITING = {"executor.waiting_for_node": "the node has not joined the owner's mesh yet; pair the node first",
            "executor.enrolled": "the executor is already in the owner's mesh",
-           "executor.unavailable": "this image has no kernel binding, so the executor cannot join a mesh"}
+           "executor.no_kernel": "this image has no kernel binding, so the executor cannot join a mesh"}
 
 
 def pair_executor(args: argparse.Namespace) -> None:

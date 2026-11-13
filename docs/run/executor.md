@@ -38,7 +38,7 @@ The executor waits until the node has joined the owner's mesh. Then it opens its
 astralvessel pair --executor
 ```
 
-An image built without the kernel wheel refuses every ticket with `executor.unavailable`.
+The image build fails unless the pinned kernel wheel is present and has the pinned sha256. If the binding still cannot be imported at run time, the executor refuses every ticket and every pairing offer with `executor.no_kernel`. That code is never used for a transport failure, which Deep reports as `executor.unavailable`.
 
 ## Known limits
 

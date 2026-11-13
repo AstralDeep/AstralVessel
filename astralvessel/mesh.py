@@ -102,7 +102,7 @@ class KernelVerifier:
 
     async def state(self) -> str:
         if self._binding is None:
-            return "unavailable"
+            return "no_kernel"
         if self._kernel is None:
             return "waiting_for_node"
         status = await self._kernel.mesh_status()

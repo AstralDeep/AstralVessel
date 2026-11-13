@@ -18,7 +18,7 @@ docker build --build-context kernel-artifacts=<folder with the kernel wheel and 
 pip install astralvessel
 ```
 
-From a checkout, use `pip install -e .`. A checkout builds the executor and sandbox images locally. If you want the executor to verify tickets, point it at the same kernel artifacts:
+From a checkout, use `pip install -e .`. A checkout builds the executor and sandbox images locally. The build needs the pinned kernel wheel and fails without it. Point the deployment at the folder that holds it:
 
 ```toml
 [executor]
