@@ -7,6 +7,10 @@ AstralVessel becomes the base's headless installation. See [Migration from 0.6.0
 - `astralvessel up` runs a personal AstralDeep node on SQLite in a named volume, with no PostgreSQL.
 - Added the executor, which verifies tickets before a sandbox runs a tool, and `pair`, `conformance`, `ask` and `chat` against the node.
 - The sandbox and egress containers are kept. The probes now check the node, the executor and the egress.
+- The executor image build needs the pinned kernel wheel and checks its sha256. A missing kernel gives `executor.no_kernel`.
+- Each agent has its own executor token, in `.generated/executor-agents.json`. The operator token lists and pairs only.
+- The executor derives a call's owner and workspace from the deployment and the verified ticket, never from the request.
+- Spent ticket ids persist across an executor restart.
 - Removed the agent loop, the A2A server, identities, history, service tools, web tools and search.
 
 ## 0.6.0 (2026-11-12)

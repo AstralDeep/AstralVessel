@@ -106,7 +106,7 @@ the call as an error. Empty output becomes `[exit code N]`.
 
 Output is cut to the agent's `tool_output_chars`, with a note saying how much was dropped. A call
 that runs past `timeout_seconds` (or `tool_timeout_seconds`) has its process group killed and returns
-`[timed out after N s]`. The fixed output caps are in [Limits](../reference/limits.md#tools).
+`[timed out after N s]`. The fixed output caps are in [Limits](../reference/limits.md).
 
 ## Where it runs
 

@@ -29,7 +29,7 @@ Each sandbox holds its own token, derived from the master secret, and nothing of
 | seccomp | No SysV IPC or POSIX message queues (shared by everything running as one user), no IPv4 or IPv6 sockets. No `setsid` or `setpgid`, so every process stays in the call's session. |
 | `no_new_privs` | Set before the rules apply. |
 | Environment | Only `PATH`, `LANG`, `HOME`, `TMPDIR` and `VESSEL_OUTBOX`. |
-| Time and output | The tool's timeout, then the whole process group is killed; output is capped (see [Limits](../reference/limits.md#tools)). |
+| Time and output | The tool's timeout, then the whole process group is killed; output is capped (see [Limits](../reference/limits.md)). |
 | Strays | Processes a call leaves behind are killed. |
 | Files and disk | At most 4,096 open files; no file larger than the turn's disk limit; [disk limits](../build/workspaces-and-files.md#disk-limits) per turn and per user. |
 
