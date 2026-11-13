@@ -17,7 +17,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from . import node
+from . import conformance, node
 from .deployment import AGENT_ID, Deployment, load_deployment
 from .manifest import load_package
 from .probes import run_probes
@@ -507,3 +507,11 @@ def chat(args: argparse.Namespace) -> None:
             print(f"error: {exc}")
             continue
         print(f"node> {answer}")
+
+
+def conformance_suite(args: argparse.Namespace) -> None:
+    deployment = _node_of(args)
+    failed = conformance.run(deployment, node.owner_token(args.token_file))
+    print(f"{len(conformance.CHECKS) - len(failed)} passed, {len(failed)} failed")
+    if failed:
+        raise SystemExit(1)

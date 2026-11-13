@@ -43,6 +43,9 @@ def parser() -> argparse.ArgumentParser:
     up.add_argument("--timeout", type=float, default=300, help="seconds to wait for the node and sandboxes (300)")
     check = sub.add_parser("check", help="run the isolation probes and the node health and descriptor checks")
     check.add_argument("deployment", nargs="?")
+    suite = sub.add_parser("conformance", help="run the acceptance checks against the running node")
+    suite.add_argument("--deployment")
+    suite.add_argument("--token-file", help="a file holding the owner's access token (default: $ASTRAL_OWNER_TOKEN)")
     pair = sub.add_parser("pair", help="print the node's pairing code and payload for the AstralDeep app")
     pair.add_argument("--label", help="a name for the offer (default: astralvessel)")
     for name, help_text in (("ask", "ask the node one question"), ("chat", "chat with the node")):
@@ -95,7 +98,7 @@ def main() -> None:
         return
     from . import operate
     sys.stdout.reconfigure(line_buffering=True)  # keep our lines in order with docker's when logged
-    getattr(operate, args.command)(args)
+    getattr(operate, "conformance_suite" if args.command == "conformance" else args.command)(args)
 
 
 if __name__ == "__main__":
