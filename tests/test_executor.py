@@ -90,7 +90,7 @@ def call(deployment, tool="bash", arguments=None, **over):
     arguments_json = json.dumps(arguments if arguments is not None else {"command": "echo ran"})
     action = {"v": 1, "mesh": "mesh-1", "device": "device-1", "turn": "turn-1", "agent": "kernel", "tool": tool,
               "tool_def": entry(deployment, tool)["definition"], "args_digest": args_digest(arguments_json),
-              "influence": [], "owner": over.get("owner", "alice"), "workspace": over.get("workspace", KEY)}
+              "influence": []}
     body = {"agent": "guide", "tool": tool, "arguments_json": arguments_json, "action_json": json.dumps(action),
             "ticket_json": json.dumps({"v": 1, "capability": "x"}), "workspace": KEY, "owner": "alice"}
     return {**body, **over}
@@ -262,31 +262,38 @@ def test_the_stopped_verifier_is_released_with_the_app(stack):
     assert verifier.stopped
 
 
-async def test_a_ticket_for_another_agent_or_mesh_or_owner_is_refused(stack, client):
+async def test_a_ticket_for_another_mesh_is_refused_and_the_agent_comes_from_the_tool_definition(stack, client):
     deployment, verifier, _ = stack
-    verifier.who["agents"] = ("other-agent",)
-    wrong_agent = await client.post("/run", json=call(deployment), headers=AUTH)
-    assert wrong_agent.status_code == 403 and wrong_agent.json()["code"] == "request.call_mismatch"
-    verifier.who["agents"] = ()
-    assert (await client.post("/run", json=call(deployment), headers=AUTH)).status_code == 403
-    verifier.who = {"mesh": "mesh-2", "device": "device-1", "turn": "turn-1", "agents": ("guide",)}
+    verifier.who = {"mesh": "mesh-2", "device": "device-1", "turn": "turn-1", "agents": ("kernel",)}
     body = call(deployment)
     body["action_json"] = json.dumps({**json.loads(body["action_json"]), "mesh": "mesh-2"})
-    wrong_mesh = await client.post("/run", json=body, headers=AUTH)
-    assert wrong_mesh.json()["code"] == "ticket.wrong_mesh"
-    verifier.who = {"mesh": "mesh-1", "device": "device-1", "turn": "turn-1", "agents": ("guide",)}
-    for field, value in (("owner", "bob"), ("workspace", "e" * 32)):
-        bound = call(deployment)
-        bound["action_json"] = json.dumps({**json.loads(bound["action_json"]), field: value})
-        refused = await client.post("/run", json=bound, headers=AUTH)
-        assert refused.json()["code"] == "request.call_mismatch"
-    for field in ("owner", "workspace"):
-        action = json.loads(call(deployment)["action_json"])
-        del action[field]
-        missing = {**call(deployment), "action_json": json.dumps(action)}
-        refused = await client.post("/run", json=missing, headers=AUTH)
-        assert refused.status_code == 403 and refused.json()["code"] == "request.call_mismatch"
+    assert (await client.post("/run", json=body, headers=AUTH)).json()["code"] == "ticket.wrong_mesh"
+    verifier.who = {"mesh": "mesh-1", "device": "device-1", "turn": "turn-1", "agents": ("kernel",)}
     assert (await client.post("/run", json=call(deployment), headers=AUTH)).status_code == 200
+    action = json.loads(call(deployment)["action_json"])
+    assert action["tool_def"] == definition_hash("guide", "bash", entry(deployment, "bash")["description"],
+                                                 entry(deployment, "bash")["input_schema"], {})
+
+
+async def test_a_node_that_names_another_owner_is_refused_when_the_deployment_names_its_owner(package_dir, tmp_path):
+    path = tmp_path / "deployment.toml"
+    text = deployment_text(package_dir, mounts="", egress=False).replace(
+        'client_id = "astral-app"', 'client_id = "astral-app"\nsubject = "alice"')
+    path.write_text(text)
+    deployment = load_deployment(path)
+    sandbox_app = sandbox.sandbox_app(str(deployment.agents["guide"].package.root), token=SANDBOX_TOKEN, confine=False)
+    runner = sandbox.RemoteRunner("http://sb", SANDBOX_TOKEN, 5, [])
+    runner._client = httpx.AsyncClient(transport=httpx.ASGITransport(app=sandbox_app), base_url="http://sb",
+                                       headers={"Authorization": "Bearer " + SANDBOX_TOKEN})
+    verifier = FakeVerifier()
+    app = executor_app(deployment, verifier, {"guide": runner}, TOKEN)
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://ex") as http:
+            other = await http.post("/run", json=call(deployment, owner="bob"), headers=AUTH)
+            assert other.status_code == 403 and other.json()["code"] == "executor.owner_mismatch"
+            assert verifier.calls == []
+            owned = await http.post("/run", json=call(deployment, owner=deployment.owner.owner_id), headers=AUTH)
+            assert owned.status_code == 200 and len(verifier.calls) == 1
 
 
 def test_the_definition_hash_is_unique_per_agent(stack):

@@ -45,9 +45,10 @@ class Verifier(Protocol):
 
 
 def definition_hash(agent: str, name: str, description: str, input_schema: Any, annotations: Any) -> str:
-    # The node hashes its advertised tool definitions the same way; the agent id makes a tool's hash its own.
-    document = {"agent": agent, "name": name, "description": description, "input_schema": input_schema,
-                "annotations": annotations}
+    # The kernel hashes a published tool as name, description, input schema and annotations, so putting the agent id in
+    # the annotations makes this the hash a device's ticket carries for a tool published with that annotation.
+    document = {"annotations": {**annotations, "agent": agent}, "description": description,
+                "input_schema": input_schema, "name": name}
     canonical = json.dumps(document, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     return "sha256:" + hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -153,6 +154,8 @@ def executor_app(deployment: Deployment, verifier: Verifier, runners: dict[str, 
             return _refusal("request.call_mismatch", 403)
         if action.get("tool_def") != entry["definition"]:
             return _refusal("gate.tool_def_changed", 403)
+        if deployment.owner.owner_id not in (None, owner):
+            return _refusal("executor.owner_mismatch", 403)
         try:
             verified = await verifier.verify(ticket_json, action_json, effect_kind(entry["scope"]))
         except Refused as exc:
@@ -162,11 +165,6 @@ def executor_app(deployment: Deployment, verifier: Verifier, runners: dict[str, 
             return _refusal("ticket.unauthorized", 403)
         if verified.mesh != await verifier.mesh_id():
             return _refusal("ticket.wrong_mesh", 403)
-        if not verified.agents or verified.agents[-1] != agent_id:
-            return _refusal("request.call_mismatch", 403)
-        bound = (("owner", owner), ("workspace", workspace))
-        if any(key not in action or action[key] != value for key, value in bound):
-            return _refusal("request.call_mismatch", 403)
         if not replays.first_use(verified.action_digest):
             return _refusal("ticket.replayed", 403)
         output, error = await runners[agent_id].run(name, arguments, workspace, owner=owner)

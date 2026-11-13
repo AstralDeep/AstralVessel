@@ -20,13 +20,14 @@ All routes except `/health` need `Authorization: Bearer <executor token>`. The t
 
 1. The tool exists for that agent. Otherwise `executor.tool_unknown`.
 2. The action names the same tool and the digest of exactly these arguments. Otherwise `request.call_mismatch`.
-3. The action's `tool_def` equals the executor's own definition hash. The hash includes the agent id. Otherwise `gate.tool_def_changed`.
-4. The kernel verifies the ticket offline, with the effect kind taken from the tool's scope. Otherwise a `ticket.*` or `gate.*` code.
-5. The verified mesh, device and turn equal the action's. Otherwise `ticket.unauthorized`.
-6. The ticket's mesh is the executor's own mesh. Otherwise `ticket.wrong_mesh`.
-7. The last agent hop of the ticket is the target agent. Otherwise `request.call_mismatch`.
-8. The action carries `owner` and `workspace`, equal to the request's. A missing or different value gives `request.call_mismatch`.
-9. This ticket has not run before. Otherwise `ticket.replayed`.
+3. The action's `tool_def` equals the executor's own definition hash. Otherwise `gate.tool_def_changed`.
+4. When `[owner]` sets a `subject`, the request's `owner` is that owner. Otherwise `executor.owner_mismatch`.
+5. The kernel verifies the ticket offline, with the effect kind taken from the tool's scope. Otherwise a `ticket.*` or `gate.*` code.
+6. The verified mesh, device and turn equal the action's. Otherwise `ticket.unauthorized`.
+7. The ticket's mesh is the executor's own mesh. Otherwise `ticket.wrong_mesh`.
+8. This ticket has not run before. Otherwise `ticket.replayed`.
+
+The kernel's action has nine fixed fields and no owner or workspace, so a ticket cannot bind them. The node names them in the request and the node's token vouches for them. The agent is bound by the definition hash. It is the kernel's hash of the tool's name, description, input schema and annotations, with `{"agent": "<id>"}` added to the annotations. A tool published to the mesh with that annotation carries that hash in the ticket.
 
 Every refusal returns HTTP 403 with a dotted `code`, and nothing runs. The replay memory lives in the executor's process and holds the last 8192 tickets.
 
