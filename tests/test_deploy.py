@@ -118,7 +118,7 @@ def test_compose_runs_a_personal_node_and_isolates_each_sandbox(data_package, tm
     assert env["ASTRAL_NODE_PROFILE"] == "personal" and env["ASTRAL_NODE_DATA_DIR"] == "/node-data/node"
     assert env["KEYCLOAK_AUTHORITY"] == "https://keycloak.test/realms/astral"
     assert env["KEYCLOAK_CLIENT_ID"] == "astral-app" and env["FF_A2A_SERVER"] == "true"
-    assert "DATABASE_URL" not in env and "ASTRAL_NODE_OWNER" not in env
+    assert env["ORCHESTRATOR_HOST"] == "0.0.0.0" and "DATABASE_URL" not in env and "ASTRAL_NODE_OWNER" not in env
     assert node["env_file"] == [".generated/node.env", ".generated/node-executor.env"]
     assert not any("postgres" in str(value).lower() for value in spec["services"].values())
     executor = spec["services"]["executor"]

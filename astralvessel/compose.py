@@ -88,6 +88,7 @@ def node_environment(deployment: Deployment) -> dict[str, str]:
         "KEYCLOAK_CLIENT_ID": owner.client_id,
         "ATTACHMENT_UPLOAD_ROOT": f"{NODE_DATA}/node/blobs",
         "PERSONAL_AGENT_ARTIFACT_ROOT": f"{NODE_DATA}/node/agents",
+        "ORCHESTRATOR_HOST": "0.0.0.0",
         "ORCHESTRATOR_PORT": str(NODE_INTERNAL_PORT),
         "PUBLIC_BASE_URL": public,
         "BACKEND_PUBLIC_URL": public,
