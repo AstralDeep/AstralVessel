@@ -9,7 +9,10 @@ import hashlib
 import hmac
 import json
 import os
-from collections import OrderedDict
+import sqlite3
+import threading
+import time
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -27,7 +30,8 @@ from .tools import BUILTIN_SCHEMAS, WORKSPACE_KEY, clip
 
 READ_SCOPES = frozenset({"tools:read", "tools:search"})
 SANDBOX_PORT = 8710
-SEEN_LIMIT = 8192
+SEEN_LIMIT = 65536
+RETENTION_SECONDS = 3600
 
 
 class Verifier(Protocol):
@@ -103,25 +107,39 @@ def _unauthorized() -> JSONResponse:
     return JSONResponse({"error": True, "output": "unauthorized"}, status_code=401)
 
 
+class ReplayMemoryFull(Exception):
+    pass
+
+
 class Replays:
-    # A ticket pays for one effect. The kernel verifies each ticket afresh, so the executor remembers which it ran.
-    def __init__(self, limit: int = SEEN_LIMIT):
-        self._seen: OrderedDict[str, None] = OrderedDict()
-        self._limit = limit
+    # A ticket pays for one effect. The kernel verifies each ticket afresh, so the executor keeps the ids it has run in a
+    # file that survives a restart. An id is kept for the retention window, which must cover the longest ticket life.
+    def __init__(self, path: Path, retention_s: int = RETENTION_SECONDS, limit: int = SEEN_LIMIT,
+                 clock: Callable[[], float] = time.time):
+        self._retention, self._limit, self._clock = retention_s, limit, clock
+        self._lock = threading.Lock()
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
+        self._db.execute("PRAGMA synchronous=FULL")
+        self._db.execute("CREATE TABLE IF NOT EXISTS spent (id TEXT PRIMARY KEY, expires REAL NOT NULL) WITHOUT ROWID")
+        path.chmod(0o600)
 
     def first_use(self, key: str) -> bool:
-        if key in self._seen:
-            return False
-        self._seen[key] = None
-        while len(self._seen) > self._limit:
-            self._seen.popitem(last=False)
-        return True
+        with self._lock:
+            now = self._clock()
+            self._db.execute("DELETE FROM spent WHERE expires <= ?", (now,))
+            if self._db.execute("SELECT COUNT(*) FROM spent").fetchone()[0] >= self._limit:
+                raise ReplayMemoryFull
+            return self._db.execute("INSERT OR IGNORE INTO spent VALUES (?, ?)",
+                                    (key, now + self._retention)).rowcount == 1
+
+    def close(self) -> None:
+        self._db.close()
 
 
 def executor_app(deployment: Deployment, verifier: Verifier, runners: dict[str, RemoteRunner], operator_token: str,
-                 agent_tokens: dict[str, str]) -> Starlette:
+                 agent_tokens: dict[str, str], replays: Replays) -> Starlette:
     tools = catalog(deployment)
-    replays = Replays()
 
     def caller(request: Request) -> tuple[str, str | None] | None:
         supplied = request.headers.get("authorization", "").removeprefix("Bearer ").encode()
@@ -200,8 +218,11 @@ def executor_app(deployment: Deployment, verifier: Verifier, runners: dict[str, 
             return _refusal("ticket.unauthorized", 403)
         if owner not in ("", bound_owner) or workspace not in (None, bound_workspace):
             return _refusal("request.call_mismatch", 403)
-        if not replays.first_use(verified.action_digest):
-            return _refusal("ticket.replayed", 403)
+        try:
+            if not replays.first_use(verified.action_digest):
+                return _refusal("ticket.replayed", 403)
+        except ReplayMemoryFull:
+            return _refusal("executor.replay_memory_full", 429)
         output, error = await runners[agent_id].run(name, arguments, bound_workspace, owner=bound_owner)
         limit = deployment.agents[agent_id].package.manifest.sandbox.tool_output_chars
         files = [f.wire() for f in runners[agent_id].take_files(bound_workspace)]
@@ -234,6 +255,7 @@ def executor_app(deployment: Deployment, verifier: Verifier, runners: dict[str, 
             yield
         finally:
             await verifier.stop()
+            replays.close()
             await asyncio.gather(*(r.close() for r in runners.values()))
 
     return Starlette(routes=[Route("/health", health), Route("/tools", listing), Route("/pairing", pairing),
@@ -261,7 +283,9 @@ def build(deployment: Deployment | None = None) -> Starlette:
         except (httpx.HTTPError, ValueError):
             return None
 
-    verifier = KernelVerifier(Path(os.environ.get("VESSEL_EXECUTOR_DIR", "/executor")), mailbox=mailbox)
+    data = Path(os.environ.get("VESSEL_EXECUTOR_DIR", "/executor"))
+    verifier = KernelVerifier(data, mailbox=mailbox)
+    replays = Replays(data / "spent.db", int(os.environ.get("VESSEL_REPLAY_RETENTION_SECONDS", RETENTION_SECONDS)))
     return executor_app(deployment, verifier, runners, os.environ["VESSEL_EXECUTOR_TOKEN"],
-                        {agent_id: agent_token(master, agent_id) for agent_id in deployment.agents})
+                        {agent_id: agent_token(master, agent_id) for agent_id in deployment.agents}, replays)
 

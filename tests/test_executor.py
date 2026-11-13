@@ -12,6 +12,7 @@ from test_deploy import deployment_text
 from astralvessel import sandbox
 from astralvessel.deployment import load_deployment
 from astralvessel.executor import (
+    ReplayMemoryFull,
     Replays,
     agent_token,
     args_digest,
@@ -74,7 +75,8 @@ def stack(package_dir, tmp_path):
     runner = sandbox.RemoteRunner("http://sb", SANDBOX_TOKEN, 5, [])
     runner._client = httpx.AsyncClient(transport=httpx.ASGITransport(app=sandbox_app), base_url="http://sb",
                                        headers={"Authorization": "Bearer " + SANDBOX_TOKEN})
-    app = executor_app(deployment, verifier, {"guide": runner}, TOKEN, {"guide": agent_token(MASTER, "guide")})
+    app = executor_app(deployment, verifier, {"guide": runner}, TOKEN, {"guide": agent_token(MASTER, "guide")},
+                       Replays(tmp_path / "spent.db"))
     return deployment, verifier, app
 
 
@@ -121,10 +123,24 @@ def test_the_catalog_lists_every_tool_with_its_scope_and_definition(stack):
     assert executor_token("m" * 16) != executor_token("n" * 16)
 
 
-def test_replays_remember_what_ran_and_forget_the_oldest():
-    seen = Replays(limit=2)
-    assert seen.first_use("a") and not seen.first_use("a") and seen.first_use("b") and seen.first_use("c")
-    assert seen.first_use("a")  # evicted, so a very old ticket is judged by its own expiry
+def test_replays_are_remembered_across_a_restart_and_forgotten_with_the_ticket(tmp_path):
+    now = [1000.0]
+    path = tmp_path / "state" / "spent.db"
+    seen = Replays(path, retention_s=60, limit=3, clock=lambda: now[0])
+    assert seen.first_use("a") and not seen.first_use("a") and seen.first_use("b")
+    assert path.stat().st_mode & 0o77 == 0
+    seen.close()
+    restarted = Replays(path, retention_s=60, limit=3, clock=lambda: now[0])
+    assert not restarted.first_use("a") and not restarted.first_use("b")
+    now[0] += 61
+    assert restarted.first_use("a")
+
+
+def test_a_full_replay_memory_refuses_rather_than_forgetting(tmp_path):
+    seen = Replays(tmp_path / "spent.db", retention_s=60, limit=2, clock=lambda: 5.0)
+    assert seen.first_use("a") and seen.first_use("b")
+    with pytest.raises(ReplayMemoryFull):
+        seen.first_use("c")
 
 
 async def test_a_verified_call_runs_in_the_sandbox_and_returns_its_output(stack, client):
@@ -246,7 +262,7 @@ async def test_an_agents_token_runs_only_that_agent_and_lists_only_its_tools(pac
         runners[agent_id] = runner
     verifier = FakeVerifier()
     tokens = {agent_id: agent_token(MASTER, agent_id) for agent_id in runners}
-    app = executor_app(deployment, verifier, runners, TOKEN, tokens)
+    app = executor_app(deployment, verifier, runners, TOKEN, tokens, Replays(tmp_path / "spent.db"))
     guide, another = ({"Authorization": f"Bearer {tokens[a]}"} for a in ("guide", "other"))
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://ex") as http:
@@ -357,7 +373,8 @@ async def test_a_deployment_without_an_owner_runs_nothing(package_dir, tmp_path)
     runner._client = httpx.AsyncClient(transport=httpx.ASGITransport(app=sandbox_app), base_url="http://sb",
                                        headers={"Authorization": "Bearer " + SANDBOX_TOKEN})
     verifier = FakeVerifier()
-    app = executor_app(deployment, verifier, {"guide": runner}, TOKEN, {"guide": agent_token(MASTER, "guide")})
+    app = executor_app(deployment, verifier, {"guide": runner}, TOKEN, {"guide": agent_token(MASTER, "guide")},
+                       Replays(tmp_path / "spent.db"))
     async with app.router.lifespan_context(app):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://ex") as http:
             refused = await http.post("/run", json=call(deployment, owner="alice"), headers=AUTH)
@@ -380,3 +397,33 @@ async def test_a_ticket_for_another_agents_tool_is_refused_for_this_agent(stack,
 def test_the_definition_hash_is_unique_per_agent(stack):
     deployment, _, _ = stack
     assert definition_hash("a", "bash", "d", {}, {}) != definition_hash("b", "bash", "d", {}, {})
+
+
+async def test_a_restarted_executor_refuses_a_ticket_it_already_ran(stack, tmp_path):
+    deployment, verifier, app = stack
+    verifier.digest = "sha256:" + "a" * 64
+    async with app.router.lifespan_context(app):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://ex") as http:
+            assert (await http.post("/run", json=call(deployment), headers=AUTH)).status_code == 200
+    sandbox_app = sandbox.sandbox_app(str(deployment.agents["guide"].package.root), token=SANDBOX_TOKEN, confine=False)
+    runner = sandbox.RemoteRunner("http://sb", SANDBOX_TOKEN, 5, [])
+    runner._client = httpx.AsyncClient(transport=httpx.ASGITransport(app=sandbox_app), base_url="http://sb",
+                                       headers={"Authorization": "Bearer " + SANDBOX_TOKEN})
+    fresh = executor_app(deployment, verifier, {"guide": runner}, TOKEN, {"guide": agent_token(MASTER, "guide")},
+                         Replays(tmp_path / "spent.db"))
+    async with fresh.router.lifespan_context(fresh):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=fresh), base_url="http://ex") as http:
+            replayed = await http.post("/run", json=call(deployment), headers=AUTH)
+            assert (replayed.status_code, replayed.json()["code"]) == (403, "ticket.replayed")
+
+
+async def test_a_full_replay_memory_answers_429_before_anything_runs(stack, client, tmp_path):
+    deployment, verifier, _ = stack
+    marker = tmp_path / "ran"
+    full = Replays(tmp_path / "other.db", limit=0)
+    app = executor_app(deployment, verifier, {}, TOKEN, {"guide": agent_token(MASTER, "guide")}, full)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://ex") as http:
+        refused = await http.post("/run", json=call(deployment, arguments={"command": f"touch {marker}"}),
+                                  headers=AUTH)
+    assert (refused.status_code, refused.json()["code"]) == (429, "executor.replay_memory_full")
+    assert not marker.exists()

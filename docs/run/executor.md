@@ -33,7 +33,11 @@ All routes except `/health` need `Authorization: Bearer <token>`. Two kinds of t
 
 The kernel's action has nine fixed fields and no owner or workspace, so a ticket cannot carry them. The executor never takes them from the request. The owner is the deployment's configured owner, bound to the mesh the ticket proves. The workspace is derived from the verified mesh and turn, and `/run` returns it so the node can end the turn. The agent is bound by the definition hash. It is the kernel's hash of the tool's name, description, input schema and annotations, with `{"agent": "<id>"}` added to the annotations. A tool published to the mesh with that annotation carries that hash in the ticket.
 
-Every refusal returns HTTP 403 with a dotted `code`, and nothing runs. The replay memory lives in the executor's process and holds the last 8192 tickets.
+Every refusal returns HTTP 403 with a dotted `code`, and nothing runs. 
+
+## Replay memory
+
+The executor writes each ticket's id to `spent.db` in its data volume before the tool runs, so a restart cannot replay a ticket. An id is kept for `VESSEL_REPLAY_RETENTION_SECONDS` (default 3600), which must be longer than the longest ticket life the owner's devices mint. The kernel's default is 300 seconds. The file holds at most 65536 live ids. When it is full the executor answers HTTP 429 with `executor.replay_memory_full` and runs nothing, rather than forget an id.
 
 ## Joining the mesh
 
@@ -48,5 +52,4 @@ The image build fails unless the pinned kernel wheel is present and has the pinn
 ## Known limits
 
 - The executor syncs through the node's mailbox. It needs a route to it on `front`. It has no relay, so it reaches the mailbox only by its direct addresses.
-- The replay memory resets when the executor restarts. A ticket's own expiry still applies.
 - The node-side adapter that sends calls to `POST /run` is not part of AstralVessel.
