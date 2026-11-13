@@ -1,7 +1,13 @@
 # Changelog
 
-Changes by version, summarized from the repository's history. 0.5.0 is the first published release; the earlier
-version numbers follow the milestones in that history and were never published.
+## Unreleased
+
+AstralVessel becomes the base's headless installation. See [Migration from 0.6.0](run/migration.md).
+
+- `astralvessel up` runs a personal AstralDeep node on SQLite in a named volume, with no PostgreSQL.
+- Added the executor, which verifies tickets before a sandbox runs a tool, and `pair`, `conformance`, `ask` and `chat` against the node.
+- The sandbox and egress containers are kept. The probes now check the node, the executor and the egress.
+- Removed the agent loop, the A2A server, identities, history, service tools, web tools and search.
 
 ## 0.6.0 (2026-11-12)
 

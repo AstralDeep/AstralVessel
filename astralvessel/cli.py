@@ -43,6 +43,7 @@ def parser() -> argparse.ArgumentParser:
     up.add_argument("--timeout", type=float, default=300, help="seconds to wait for the node and sandboxes (300)")
     check = sub.add_parser("check", help="run the isolation probes and the node health and descriptor checks")
     check.add_argument("deployment", nargs="?")
+    check.add_argument("--isolation-only", action="store_true", help="skip the node checks, for hosts with no node")
     suite = sub.add_parser("conformance", help="run the acceptance checks against the running node")
     suite.add_argument("--deployment")
     suite.add_argument("--token-file", help="a file holding the owner's access token (default: $ASTRAL_OWNER_TOKEN)")

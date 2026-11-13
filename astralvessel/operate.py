@@ -418,7 +418,7 @@ def check(args: argparse.Namespace) -> None:
     deployment = load_deployment(stack.deployment)
     _require_env(stack, deployment)
     report = run_probes(stack, deployment, os.environ.get("VESSEL_SANDBOX_TOKEN", ""))
-    failed = node_checks(stack, deployment)
+    failed = [] if args.isolation_only else node_checks(stack, deployment)
     print(f"{report.passed} probes passed, {len(report.failed)} failed, {report.skipped} skipped")
     if report.failed or failed:
         raise SystemExit(1)

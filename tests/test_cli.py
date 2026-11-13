@@ -19,14 +19,15 @@ def test_commands_reach_their_operator_functions(monkeypatch):
     for name in ("up", "check", "down", "pair", "ask", "chat"):
         monkeypatch.setattr(operate, name, lambda args, name=name: called.append((name, args)))
     run(monkeypatch, "up", "--issuer", ISSUER, "--client-id", "c", "--port", "9000", "--example")
-    run(monkeypatch, "check")
+    run(monkeypatch, "check", "--isolation-only")
     run(monkeypatch, "down", "--volumes")
     run(monkeypatch, "pair", "--executor", "--label", "x")
     run(monkeypatch, "ask", "hello?", "--token-file", "t")
     run(monkeypatch, "chat")
     names = [n for n, _ in called]
     assert names == ["up", "check", "down", "pair", "ask", "chat"]
-    up, _, down, pair, ask, _ = (a for _, a in called)
+    up, check, down, pair, ask, _ = (a for _, a in called)
+    assert check.isolation_only
     assert (up.issuer, up.client_id, up.port, up.example) == (ISSUER, "c", 9000, True)
     assert down.volumes and pair.executor and pair.label == "x" and ask.question == "hello?"
     assert ask.token_file == "t"

@@ -295,3 +295,19 @@ def test_the_executor_offer_is_printed_or_explained(tmp_path, monkeypatch, capsy
     replies = ["not json"]
     with pytest.raises(SystemExit, match="did not answer"):
         operate.pair(args)
+
+
+def test_check_can_skip_the_node_checks(tmp_path, monkeypatch):
+    path = operate.write_deployment(tmp_path, operate.Answers(issuer=ISSUER, client_id="c"), example=False)
+    (tmp_path / "compose.generated.yml").write_text("services: {}\n")
+    monkeypatch.setenv("VESSEL_SANDBOX_TOKEN", "m" * 16)
+    monkeypatch.setattr(operate, "run_probes", lambda *a: argparse.Namespace(passed=3, failed=[], skipped=0))
+
+    def boom(*args):
+        raise AssertionError("node checks must not run")
+
+    monkeypatch.setattr(operate, "node_checks", boom)
+    operate.check(argparse.Namespace(deployment=str(path), isolation_only=True))
+    monkeypatch.setattr(operate, "node_checks", lambda *a: ["node: answers /readyz"])
+    with pytest.raises(SystemExit):
+        operate.check(argparse.Namespace(deployment=str(path), isolation_only=False))
