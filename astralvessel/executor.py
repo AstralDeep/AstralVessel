@@ -121,7 +121,7 @@ class Replays:
         path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         self._db = sqlite3.connect(path, check_same_thread=False, isolation_level=None)
         self._db.execute("PRAGMA synchronous=FULL")
-        self._db.execute("CREATE TABLE IF NOT EXISTS spent (id TEXT PRIMARY KEY, expires REAL NOT NULL) WITHOUT ROWID")
+        self._db.execute("CREATE TABLE IF NOT EXISTS spent (id TEXT PRIMARY KEY, expires REAL NOT NULL)")
         path.chmod(0o600)
 
     def first_use(self, key: str) -> bool:
